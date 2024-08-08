@@ -45,7 +45,7 @@ router.post('/', (req, res) => {
             }
 
             // Insert product into Product table
-            connection.query('INSERT INTO product (Pname, price, sizes, images, size_type, size_value) VALUES (?, ?, ?, ?, ?, ?)',
+            connection.query('INSERT INTO Product (Pname, price, sizes, images, size_type, size_value) VALUES (?, ?, ?, ?, ?, ?)',
                 [Pname, price, sizes, images, size_type, size_value],
                 (productErr, productResult) => {
                     if (productErr) {
@@ -58,7 +58,7 @@ router.post('/', (req, res) => {
 
                     // Generate QR code for the product
                     const productID = productResult.insertId;
-                    const qrURL = 'localhost:4200/main/viewshoe'; // URL to redirect when scanning QR code
+                    const qrURL = 'http://localhost:4200/main/viewshoe'; // URL to redirect when scanning QR code
                     const qrImage = qr.image(qrURL, { type: 'png' });
                     const qrImagePath = `./qr-codes/product_${productID}.png`;
 
