@@ -189,42 +189,74 @@ router.post('/register', upload.single('image'), async (req, res) => {
     const image = req.file ? req.file.path : null;
 
     try {
-        // Ensure password is defined
-        if (!password) {
-            return res.status(400).send('Password is required');
+        // Ensure required fields are defined
+        if (!username || !password || !fname || !lname) {
+            return res.status(400).send('Missing required fields');
         }
 
-        // Check if admin already exists
-        pool.query('SELECT * FROM Admin WHERE username = ?', [username], async (err, results) => {
-            if (err) {
-                return res.status(500).send('Error checking admin existence');
-            }
+        // Check if the admin already exists
+        const [existingAdmin] = await pool.query('SELECT * FROM Admin WHERE username = ?', [username]);
 
-            if (results.length > 0) {
-                // Admin already exists
-                return res.status(409).send('Admin with this username already exists');
-            }
+        if (existingAdmin.length > 0) {
+            return res.status(409).send('Admin with this username already exists');
+        }
 
-            // Hash the password
-            const hashedPassword = await bcrypt.hash(password, 10);
+        // Hash the password
+        const hashedPassword = await bcrypt.hash(password, 10);
 
-            // Insert the new admin into the database
-            pool.query('INSERT INTO Admin (username, password, fname, lname, mname, suffix, age, address, images) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                [username, hashedPassword, fname, lname, mname, suffix, age, address, image],
-                (err, result) => {
-                    if (err) {
-                        return res.status(500).send('Error registering admin');
-                    }
-                    res.status(201).send('Admin registered successfully');
-                });
-        });
+        // Insert the new admin into the database
+        const [result] = await pool.query(
+            'INSERT INTO Admin (username, password, fname, lname, mname, suffix, age, address, images) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [username, hashedPassword, fname, lname, mname, suffix, age, address, image]
+        );
+
+        if (result.affectedRows > 0) {
+            return res.status(201).send('Admin registered successfully');
+        } else {
+            throw new Error('Failed to register admin');
+        }
     } catch (error) {
+        console.error('Error during registration:', error);
+        return res.status(500).send('Server error');
+    }
+});
+
+// Admin login endpoint
+router.post('/login', async (req, res) => {
+    const { username, password } = req.body;
+
+    try {
+        // Ensure required fields are provided
+        if (!username || !password) {
+            return res.status(400).send('Username and password are required');
+        }
+
+        // Retrieve admin from the database by username
+        const [results] = await pool.query('SELECT * FROM Admin WHERE username = ?', [username]);
+
+        // Check if admin with the given username exists
+        if (results.length === 0) {
+            return res.status(401).send('Invalid username or password');
+        }
+
+        // Compare the provided password with the hashed password from the database
+        const match = await bcrypt.compare(password, results[0].password);
+        if (!match) {
+            return res.status(401).send('Invalid username or password');
+        }
+
+        // Generate JWT token
+        const token = jwt.sign({ adminId: results[0].admin_id }, 'your_secret_key', { expiresIn: '1h' });
+
+        // Send the token back to the client
+        res.status(200).json({ token });
+    } catch (error) {
+        console.error('Error during authentication:', error);
         res.status(500).send('Server error');
     }
 });
 
-
-// Admin login endpoint
+// Admin Create Product
 router.post('/', async (req, res) => {
     const { Pname, price, images, variants } = req.body;
 
