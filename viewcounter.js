@@ -8,7 +8,7 @@ router.post('/increment-view', (req, res) => {
         // Increment the view count
         pool.query('UPDATE ShopViews SET view_count = view_count + 1', (err, results) => {
             if (err) {
-                return res.status(500).json({ error: 'Error updating view count' });
+                return res.status(500).json({ error: 'Error updating view count 1' });
             }
 
             // Set a cookie to prevent counting this user again in this session
