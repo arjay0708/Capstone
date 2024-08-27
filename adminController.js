@@ -184,40 +184,6 @@ function verifyToken(req, res, next) {
 }
 
 // Admin registration endpoint
-router.post('/login', async (req, res) => {
-    const { username, password } = req.body;
-
-    try {
-        // Ensure required fields are provided
-        if (!username || !password) {
-            return res.status(400).send('Username and password are required');
-        }
-
-        // Retrieve admin from the database by username
-        const [results] = await pool.query('SELECT * FROM Admin WHERE username = ?', [username]);
-
-        // Check if admin with the given username exists
-        if (results.length === 0) {
-            return res.status(401).send('Invalid username or password');
-        }
-
-        // Compare the provided password with the hashed password from the database
-        const match = await bcrypt.compare(password, results[0].password);
-        if (!match) {
-            return res.status(401).send('Invalid username or password');
-        }
-
-        // Generate JWT token
-        const token = jwt.sign({ adminId: results[0].admin_id }, 'your_secret_key', { expiresIn: '1h' });
-
-        // Send the token back to the client
-        res.status(200).json({ token });
-    } catch (error) {
-        console.error('Error during authentication:', error);
-        res.status(500).send('Server error');
-    }
-});
-
 router.post('/register', upload.single('image'), async (req, res) => {
     const { username, password, fname, lname, mname, suffix, age, address } = req.body;
     const image = req.file ? req.file.path : null;
@@ -255,8 +221,42 @@ router.post('/register', upload.single('image'), async (req, res) => {
     }
 });
 
-
 // Admin login endpoint
+router.post('/login', async (req, res) => {
+    const { username, password } = req.body;
+
+    try {
+        // Ensure required fields are provided
+        if (!username || !password) {
+            return res.status(400).send('Username and password are required');
+        }
+
+        // Retrieve admin from the database by username
+        const [results] = await pool.query('SELECT * FROM Admin WHERE username = ?', [username]);
+
+        // Check if admin with the given username exists
+        if (results.length === 0) {
+            return res.status(401).send('Invalid username or password');
+        }
+
+        // Compare the provided password with the hashed password from the database
+        const match = await bcrypt.compare(password, results[0].password);
+        if (!match) {
+            return res.status(401).send('Invalid username or password');
+        }
+
+        // Generate JWT token
+        const token = jwt.sign({ adminId: results[0].admin_id }, 'your_secret_key', { expiresIn: '1h' });
+
+        // Send the token back to the client
+        res.status(200).json({ token });
+    } catch (error) {
+        console.error('Error during authentication:', error);
+        res.status(500).send('Server error');
+    }
+});
+
+// Admin Create Product
 router.post('/', async (req, res) => {
     const { Pname, price, images, variants } = req.body;
 
@@ -396,3 +396,4 @@ router.post('/products', verifyToken, upload.single('image'), (req, res) => {
 });
 
 module.exports = router;
+
