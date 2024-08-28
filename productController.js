@@ -1,193 +1,90 @@
 const express = require('express');
 const router = express.Router();
-const pool = require('./connection');
-const qr = require('qr-image');
-const fs = require('fs');
+const multer = require('multer');
 const path = require('path');
+const cors = require('cors');
+const fs = require('fs');
+const qr = require('qr-image');
+const pool = require('./connection'); // Adjust the path to your database connection file
 
-router.get('/', async (req, res) => {
-    const query = `
-         SELECT 
-        p.product_id, 
-        p.Pname, 
-        p.price AS productPrice, 
-        p.images, 
-        p.category,
-        p.description, 
-        pv.gender, 
-        pv.size, 
-        pv.quantity
-    FROM 
-        Product p
-    LEFT JOIN 
-        ProductVariant pv ON p.product_id = pv.product_id
-    `;
-
-    try {
-        // Get a connection from the pool
-        const connection = await pool.getConnection();
-        
-        // Execute the query
-        const [results] = await connection.query(query);
-
-        // Release the connection
-        connection.release();
-
-        // Organize products with their variants
-        const products = results.reduce((acc, row) => {
-            if (!acc[row.product_id]) {
-                acc[row.product_id] = {
-                    product_id: row.product_id,
-                    Pname: row.Pname,
-                    description: row.description,
-                    price: row.productPrice,
-                    images: JSON.parse(row.images), // Parse images if stored as JSON
-                    variants: []
-                };
-            }
-
-            if (row.gender) {
-                acc[row.product_id].variants.push({
-                    gender: row.gender,
-                    size: row.size,
-                    quantity: row.quantity
-                });
-            }
-
-            return acc;
-        }, {});
-
-        // Send organized data
-        res.json(Object.values(products));
-    } catch (error) {
-        console.error('Error executing query:', error); // Log detailed error
-        res.status(500).json({ error: 'Error retrieving products' });
+// Set up storage for Multer
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, 'D:/Capstone/Capstone/uploads'); // Ensure this path is correct and exists
+    },
+    filename: function (req, file, cb) {
+        cb(null, Date.now() + path.extname(file.originalname));
     }
 });
 
+const upload = multer({ storage: storage });
 
-router.get('/:id', async (req, res) => {
-    const productId = req.params.id;
-    const query = `
-         SELECT 
-        p.product_id AS id, 
-        p.Pname, 
-        p.price AS productPrice, 
-        p.images, 
-        p.category,
-        p.description, 
-        pv.gender, 
-        pv.size, 
-        pv.quantity
-    FROM 
-        Product p
-    LEFT JOIN 
-        ProductVariant pv ON p.product_id = pv.product_id
-    WHERE 
-        p.product_id = ?
-    `;
+// POST route to create a product
+router.post('/', upload.array('images'), async (req, res) => {
+    const { Pname, price, category, description, variants } = req.body;
+
+    // Log received files and data for debugging
+    console.log('Received files:', req.files);
+    console.log('Received body data:', { Pname, price, category, description, variants });
+
+    // Check if files were uploaded
+    if (!req.files || req.files.length === 0) {
+        return res.status(400).json({ error: 'No files uploaded' });
+    }
+
+    const images = req.files.map(file => file.filename); // Get the uploaded filenames
+
+    // Ensure `variants` is an array
+    let parsedVariants = [];
+    try {
+        parsedVariants = Array.isArray(variants) ? variants : JSON.parse(variants);
+    } catch (error) {
+        console.error('Error parsing variants:', error);
+        return res.status(400).json({ error: 'Invalid variants data' });
+    }
 
     let connection;
 
     try {
-        // Get a connection from the pool
         connection = await pool.getConnection();
-
-        // Execute the query
-        const [results] = await connection.query(query, [productId]);
-
-        // Release the connection
-        connection.release();
-
-        // Check if any results were found
-        if (results.length === 0) {
-            return res.status(404).json({ error: 'Product not found' });
-        }
-
-        // Organize the product with its variants
-        const product = results.reduce((acc, row) => {
-            if (!acc) {
-                acc = {
-                    id: row.id,
-                    Pname: row.Pname,
-                    productPrice: row.productPrice,
-                    description: row.description,
-                    category: row.category,
-                    images: JSON.parse(row.images), // Parse images if stored as JSON
-                    variants: []
-                };
-            }
-
-            if (row.gender) {
-                acc.variants.push({
-                    gender: row.gender,
-                    size: row.size,
-                    quantity: row.quantity
-                });
-            }
-
-            return acc;
-        }, null);
-
-        // Send organized data
-        res.status(200).json(product);
-    } catch (error) {
-        console.error('Error retrieving product:', error); // Log detailed error
-        res.status(500).json({ error: 'Error retrieving product' });
-    } finally {
-        if (connection) connection.release();
-    }
-});
-
-
-// Create a new product with variants and QR code generation
-router.post('/', async (req, res) => {
-    const { Pname, price, images, category, description, variants } = req.body;
-
-    let connection;
-
-    try {
-        // Get a connection from the pool
-        connection = await pool.getConnection();
-
-        // Start a transaction
         await connection.beginTransaction();
 
-        // Convert images to JSON string
+        // Convert images array to JSON string
         const imagesJson = JSON.stringify(images);
 
-        // Insert product into Product table
         const [productResult] = await connection.query(
             'INSERT INTO Product (Pname, price, images, category, description) VALUES (?, ?, ?, ?, ?)',
-            [Pname, price, imagesJson, category, description] // Added category and description
+            [Pname, price, imagesJson, category, description]
         );
 
         const productID = productResult.insertId;
 
-        // Insert product variants
-        const variantQueries = variants.map(variant =>
+        // Validate and insert variants
+        const variantQueries = parsedVariants.map(variant =>
             connection.query(
                 'INSERT INTO ProductVariant (product_id, gender, size, quantity) VALUES (?, ?, ?, ?)',
                 [productID, variant.gender, variant.size, variant.quantity]
             )
         );
 
-        // Generate QR code for the product
+        // Ensure QR code directory exists
+        const qrCodeDir = 'D:/Capstone/Capstone/qr-codes';
+        if (!fs.existsSync(qrCodeDir)) {
+            fs.mkdirSync(qrCodeDir, { recursive: true });
+        }
+
         const qrURL = `https://gaposource.com/viewshop/inside/${productID}`;
         const qrImage = qr.imageSync(qrURL, { type: 'png' });
-        const qrImagePath = path.join(__dirname, 'qr-codes', `product_${productID}.png`);
+        const qrImagePath = path.join(qrCodeDir, `product_${productID}.png`); // Ensure this path exists
 
         fs.writeFileSync(qrImagePath, qrImage);
 
-        // Execute all variant insert queries
         await Promise.all(variantQueries);
-
-        // Commit the transaction
         await connection.commit();
 
         res.status(201).json({
             message: `Product created with ID: ${productID}`,
-            qr_id: productID // Assuming the product ID is used as qr_id
+            qr_id: productID
         });
     } catch (error) {
         console.error('Error creating product:', error);
@@ -204,17 +101,14 @@ router.post('/', async (req, res) => {
     }
 });
 
-
-
-// Update an existing product and its variants
-router.put('/:id', (req, res) => {
+// PUT update product and its variants
+router.put('/:id', upload.array('images'), (req, res) => {
     const productId = req.params.id;
-    const { Pname, price, sizes, images, size_type, size_value, variants } = req.body;
+    const { Pname, price, sizes, size_type, size_value, variants } = req.body;
+    const images = req.files ? req.files.map(file => file.filename) : [];
 
     pool.getConnection((err, connection) => {
-        if (err) {
-            return res.status(500).json({ error: 'Error connecting to the database' });
-        }
+        if (err) return res.status(500).json({ error: 'Error connecting to the database' });
 
         connection.beginTransaction((transactionErr) => {
             if (transactionErr) {
@@ -222,9 +116,9 @@ router.put('/:id', (req, res) => {
                 return res.status(500).json({ error: 'Error starting database transaction' });
             }
 
-            // Update product details
+            const imagesJson = JSON.stringify(images);
             connection.query('UPDATE Product SET Pname = ?, price = ?, sizes = ?, images = ?, size_type = ?, size_value = ? WHERE product_id = ?',
-                [Pname, price, sizes, images, size_type, size_value, productId],
+                [Pname, price, sizes, imagesJson, size_type, size_value, productId],
                 (productErr) => {
                     if (productErr) {
                         connection.rollback(() => {
@@ -233,7 +127,6 @@ router.put('/:id', (req, res) => {
                         });
                     }
 
-                    // Delete existing variants
                     connection.query('DELETE FROM ProductVariant WHERE product_id = ?', [productId], (deleteErr) => {
                         if (deleteErr) {
                             connection.rollback(() => {
@@ -242,7 +135,6 @@ router.put('/:id', (req, res) => {
                             });
                         }
 
-                        // Insert updated variants
                         const variantQueries = variants.map(variant => (
                             new Promise((resolve, reject) => {
                                 connection.query('INSERT INTO ProductVariant (product_id, gender, size, quantity) VALUES (?, ?, ?, ?)',
@@ -254,7 +146,6 @@ router.put('/:id', (req, res) => {
                             })
                         ));
 
-                        // Commit the transaction if product and variants update succeed
                         Promise.all(variantQueries)
                             .then(() => {
                                 connection.commit((commitErr) => {
@@ -281,14 +172,13 @@ router.put('/:id', (req, res) => {
     });
 });
 
-// Delete a product and its variants
+
+// DELETE a product and its variants
 router.delete('/:id', (req, res) => {
     const productId = req.params.id;
 
     pool.getConnection((err, connection) => {
-        if (err) {
-            return res.status(500).json({ error: 'Error connecting to the database' });
-        }
+        if (err) return res.status(500).json({ error: 'Error connecting to the database' });
 
         connection.beginTransaction((transactionErr) => {
             if (transactionErr) {
@@ -296,7 +186,6 @@ router.delete('/:id', (req, res) => {
                 return res.status(500).json({ error: 'Error starting database transaction' });
             }
 
-            // Delete product variants
             connection.query('DELETE FROM ProductVariant WHERE product_id = ?', [productId], (deleteVariantsErr) => {
                 if (deleteVariantsErr) {
                     connection.rollback(() => {
@@ -305,7 +194,6 @@ router.delete('/:id', (req, res) => {
                     });
                 }
 
-                // Delete product
                 connection.query('DELETE FROM Product WHERE product_id = ?', [productId], (deleteProductErr) => {
                     if (deleteProductErr) {
                         connection.rollback(() => {
@@ -331,29 +219,23 @@ router.delete('/:id', (req, res) => {
     });
 });
 
-// Download or print QR code for a specific product
+// GET QR code for a specific product
 router.get('/:id/qr-id', (req, res) => {
     const productId = req.params.id;
 
-    // Query the database to retrieve QR code information from the qrcode table
     pool.query('SELECT qr_id FROM qrcode WHERE product_id = ?', [productId], (err, results) => {
         if (err) {
             console.error('Error retrieving QR code:', err);
             return res.status(500).json({ error: 'Error retrieving QR code' });
         }
 
-        // Check if QR code exists for the product
         if (results.length === 0) {
             return res.status(404).json({ error: 'QR code not found for the product' });
         }
 
-        // Extract qr_id from the query results
         const qrId = results[0].qr_id;
+        const qrImagePath = path.join(__dirname, 'qr-codes', `${qrId}.png`);
 
-        // Construct the file path for the QR code image
-        const qrImagePath = path.join(__dirname, 'qr-codes', `${qrId}.png`); // Assuming qr_id is a file name
-
-        // Send the QR code image file as a response for download
         res.download(qrImagePath, `product_${productId}_qr.png`, (downloadErr) => {
             if (downloadErr) {
                 console.error('Error downloading QR code:', downloadErr);
@@ -363,24 +245,26 @@ router.get('/:id/qr-id', (req, res) => {
     });
 });
 
-// Generate QR code for a product
+// GENERATE QR code for a product
 router.get('/generate-qr/:productId', (req, res) => {
     const productId = req.params.productId;
 
-    // Construct the product URL or unique identifier
     const productURL = `https://gaposource.com/viewshop/inside/${productId}`;
-
-    // Generate QR code with the product URL encoded
     const qrImage = qr.imageSync(productURL, { type: 'png' });
     res.type('png');
     res.send(qrImage);
 });
 
-// Retrieve product details from the encoded identifier
+// TEST route
+router.get('/test', (req, res) => {
+    console.log('Test route hit');
+    res.send('Test route works');
+});
+
+// GET product details from the encoded identifier
 router.get('/product-details/:productId', (req, res) => {
     const productId = req.params.productId;
 
-    // Retrieve product details from the database using the productId
     pool.query('SELECT * FROM Product WHERE product_id = ?', [productId], (err, results) => {
         if (err) {
             return res.status(500).json({ error: 'Error retrieving product' });
@@ -388,9 +272,232 @@ router.get('/product-details/:productId', (req, res) => {
         if (results.length === 0) {
             return res.status(404).json({ error: 'Product not found' });
         }
-        // Redirect user to the product page
         res.redirect(`/products/${productId}`);
     });
+});
+
+// FILTER products by category and gender
+router.get('/filter', async (req, res) => {
+    const { category, gender } = req.query;
+
+    const genderMapping = {
+        "Men's Wear": 'Male',
+        "Women's Wear": 'Female',
+        "Unisex": null
+    };
+
+    const mappedGender = genderMapping[gender] || gender;
+
+    let productQuery = 'SELECT DISTINCT p.* FROM Product p WHERE 1=1';
+    let productParams = [];
+
+    if (category && category !== '0') {
+        productQuery += ' AND p.category = ?';
+        productParams.push(category);
+    }
+
+    let variantQuery = 'SELECT pv.product_id FROM ProductVariant pv WHERE 1=1';
+    let variantParams = [];
+
+    if (mappedGender) {
+        if (mappedGender !== 'Unisex') {
+            variantQuery += ' AND pv.gender = ?';
+            variantParams.push(mappedGender);
+        }
+    } else {
+        variantQuery = 'SELECT DISTINCT pv.product_id FROM ProductVariant pv';
+    }
+
+    try {
+        const connection = await pool.getConnection();
+        const [products] = await connection.query(productQuery, productParams);
+        const [variantResults] = await connection.query(variantQuery, variantParams);
+        connection.release();
+
+        const variantProductIds = new Set(variantResults.map(v => v.product_id));
+        const filteredProducts = products.filter(product => variantProductIds.has(product.product_id));
+
+        if (filteredProducts.length === 0) {
+            return res.status(404).json({ error: 'No products found' });
+        }
+
+        res.json(filteredProducts);
+    } catch (error) {
+        console.error('Error fetching products:', error);
+        res.status(500).json({ error: 'Error fetching products' });
+    }
+});
+
+// SEARCH products by name
+router.get('/search', async (req, res) => {
+    const { search } = req.query;
+
+    if (!search) {
+        return res.status(400).json({ error: 'Search query parameter is required' });
+    }
+
+    try {
+        const connection = await pool.getConnection();
+        const [results] = await connection.query(
+            'SELECT * FROM Product WHERE Pname LIKE ?',
+            [`%${search}%`]
+        );
+        connection.release();
+
+        if (results.length === 0) {
+            return res.status(404).json({ error: 'No products found' });
+        }
+
+        res.json(results);
+    } catch (error) {
+        console.error('Error searching products:', error);
+        res.status(500).json({ error: 'Error searching products' });
+    }
+});
+
+router.get('/', async (req, res) => {
+    const query = `
+        SELECT 
+            p.product_id, 
+            p.Pname, 
+            p.price AS productPrice, 
+            p.images, 
+            p.category,
+            p.description, 
+            pv.gender, 
+            pv.size, 
+            pv.quantity
+        FROM 
+            Product p
+        LEFT JOIN 
+            ProductVariant pv ON p.product_id = pv.product_id
+    `;
+
+    try {
+        const connection = await pool.getConnection();
+        const [results] = await connection.query(query);
+        connection.release();
+
+        // Organize products with their variants
+        const products = results.reduce((acc, row) => {
+            if (!acc[row.product_id]) {
+                acc[row.product_id] = {
+                    product_id: row.product_id,
+                    Pname: row.Pname,
+                    description: row.description,
+                    price: row.productPrice,
+                    images: JSON.parse(row.images).map(image => `/uploads/${path.basename(image)}`),
+                    variants: []
+                };
+            }
+
+            if (row.gender) {
+                acc[row.product_id].variants.push({
+                    gender: row.gender,
+                    size: row.size,
+                    quantity: row.quantity
+                });
+            }
+
+            return acc;
+        }, {});
+
+        res.json(Object.values(products));
+    } catch (error) {
+        console.error('Error executing query:', error);
+        res.status(500).json({ error: 'Error retrieving products' });
+    }
+});
+
+router.get('/categories', async (req, res) => {
+    try {
+        // Query to get distinct categories from the Product table
+        const query = 'SELECT DISTINCT category FROM Product';
+        
+        // Get a connection from the pool
+        const connection = await pool.getConnection();
+        
+        // Execute the query
+        const [results] = await connection.query(query);
+        
+        // Release the connection
+        connection.release();
+        
+        // Extract the categories from the results
+        const categories = results.map(row => row.category);
+
+        // Return the categories as JSON
+        res.json(categories);
+    } catch (error) {
+        console.error('Error fetching categories:', error);
+        res.status(500).json({ error: 'Error fetching categories' });
+    }
+});
+
+
+// Route to get product by ID
+router.get('/:id', async (req, res) => {
+    const productId = req.params.id;
+    const query = `
+        SELECT 
+            p.product_id AS id, 
+            p.Pname, 
+            p.price AS productPrice, 
+            p.images, 
+            p.category,
+            p.description, 
+            pv.gender, 
+            pv.size, 
+            pv.quantity
+        FROM 
+            Product p
+        LEFT JOIN 
+            ProductVariant pv ON p.product_id = pv.product_id
+        WHERE 
+            p.product_id = ?
+    `;
+
+    let connection;
+
+    try {
+        connection = await pool.getConnection();
+        const [results] = await connection.query(query, [productId]);
+
+        if (results.length === 0) {
+            return res.status(404).json({ error: 'Product not found' });
+        }
+
+        const product = results.reduce((acc, row) => {
+            if (!acc) {
+                acc = {
+                    id: row.id,
+                    Pname: row.Pname,
+                    productPrice: row.productPrice,
+                    description: row.description,
+                    category: row.category,
+                    images: JSON.parse(row.images).map(image => `uploads/${path.basename(image)}`),
+                    variants: []
+                };
+            }
+
+            if (row.gender) {
+                acc.variants.push({
+                    gender: row.gender,
+                    size: row.size,
+                    quantity: row.quantity
+                });
+            }
+
+            return acc;
+        }, null);
+
+        res.status(200).json(product);
+    } catch (error) {
+        console.error('Error retrieving product:', error);
+        res.status(500).json({ error: 'Error retrieving product' });
+    } finally {
+        if (connection) connection.release();
+    }
 });
 
 module.exports = router;
