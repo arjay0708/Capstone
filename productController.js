@@ -7,6 +7,7 @@ const fs = require('fs');
 const qr = require('qr-image');
 const pool = require('./connection'); // Adjust the path to your database connection file
 
+
 // Set up storage for Multer
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
@@ -171,6 +172,7 @@ router.put('/:id', upload.array('images'), (req, res) => {
         });
     });
 });
+
 
 
 // DELETE a product and its variants
@@ -363,6 +365,7 @@ router.get('/', async (req, res) => {
             p.price AS productPrice, 
             p.images, 
             p.category,
+            p.created_at,
             p.description, 
             pv.gender, 
             pv.size, 
@@ -371,6 +374,8 @@ router.get('/', async (req, res) => {
             Product p
         LEFT JOIN 
             ProductVariant pv ON p.product_id = pv.product_id
+        ORDER BY 
+            p.created_at DESC
     `;
 
     try {
@@ -384,8 +389,10 @@ router.get('/', async (req, res) => {
                 acc[row.product_id] = {
                     product_id: row.product_id,
                     Pname: row.Pname,
+                    category: row.category,
                     description: row.description,
                     price: row.productPrice,
+                    date: row.created_at,
                     images: JSON.parse(row.images).map(image => `/uploads/${path.basename(image)}`),
                     variants: []
                 };
@@ -402,12 +409,31 @@ router.get('/', async (req, res) => {
             return acc;
         }, {});
 
-        res.json(Object.values(products));
+        // Convert the object to an array and sort by date in descending order
+        const sortedProducts = Object.values(products).sort((a, b) => new Date(b.date) - new Date(a.date));
+
+        res.json(sortedProducts);
     } catch (error) {
         console.error('Error executing query:', error);
         res.status(500).json({ error: 'Error retrieving products' });
     }
 });
+
+router.get('/category-counts', async (req, res) => {
+    try {
+      const query = `
+        SELECT category, COUNT(*) AS count
+        FROM product
+        GROUP BY category
+      `;
+      const connection = await pool.getConnection();
+      const [results] = await connection.query(query);
+      res.json(results);
+    } catch (error) {
+      console.error('Error fetching category counts:', error);
+      res.status(500).send('Server error');
+    }
+  });
 
 router.get('/categories', async (req, res) => {
     try {
@@ -499,5 +525,7 @@ router.get('/:id', async (req, res) => {
         if (connection) connection.release();
     }
 });
+
+
 
 module.exports = router;

@@ -7,6 +7,8 @@ const bodyParser = require('body-parser');
 const adminRouter = require('./adminController.js');
 const productRouter = require('./productController.js');
 const qrcodeRouter = require('./qrcodeController.js');
+const countsRouter = require('./viewcounter.js');
+
 const path = require('path');
 
 app.use(cors({
@@ -24,6 +26,8 @@ app.use(bodyParser.json());
 app.use('/admins', adminRouter);
 app.use('/products', productRouter);
 app.use('/qrcodes', qrcodeRouter);
+app.use('/counts', countsRouter);
+
 
 // Serve static files from the uploads directory
 app.get('/', (req, res) => {

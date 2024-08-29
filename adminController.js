@@ -154,6 +154,9 @@ const bcrypt = require('bcrypt');
 const pool = require('./connection');
 const multer = require('multer');
 const path = require('path');
+const fs = require('fs');
+const qr = require('qr-image'); // Ensure you have this library installed
+require('dotenv').config(); // Ensure you have dotenv installed
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -169,13 +172,18 @@ const upload = multer({ storage: storage });
 
 // Middleware function to verify JWT token
 function verifyToken(req, res, next) {
-    const token = req.headers['authorization'];
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1]; // Extract token from 'Bearer <token>'
+
+    console.log('Received Token:', token); // Log the token for debugging
+  
     if (!token) {
         return res.status(403).send('Token is required');
     }
-
-    jwt.verify(token, 'your_secret_key', (err, decoded) => {
+  
+    jwt.verify(token, process.env.JWT_SECRET_KEY, (err, decoded) => { // Use environment variable for secret key
         if (err) {
+            console.error('Token Verification Error:', err); // Log verification errors
             return res.status(401).send('Invalid token');
         }
         req.adminId = decoded.adminId;
@@ -226,33 +234,66 @@ router.post('/login', async (req, res) => {
     const { username, password } = req.body;
 
     try {
-        // Ensure required fields are provided
         if (!username || !password) {
             return res.status(400).send('Username and password are required');
         }
 
-        // Retrieve admin from the database by username
         const [results] = await pool.query('SELECT * FROM Admin WHERE username = ?', [username]);
 
-        // Check if admin with the given username exists
         if (results.length === 0) {
             return res.status(401).send('Invalid username or password');
         }
 
-        // Compare the provided password with the hashed password from the database
         const match = await bcrypt.compare(password, results[0].password);
         if (!match) {
             return res.status(401).send('Invalid username or password');
         }
 
-        // Generate JWT token
-        const token = jwt.sign({ adminId: results[0].admin_id }, 'your_secret_key', { expiresIn: '1h' });
+        const token = jwt.sign({ adminId: results[0].admin_id }, process.env.JWT_SECRET_KEY, { expiresIn: '1h' }); // Use environment variable for secret key
 
-        // Send the token back to the client
         res.status(200).json({ token });
     } catch (error) {
         console.error('Error during authentication:', error);
         res.status(500).send('Server error');
+    }
+});
+
+router.put('/changepassword', verifyToken, async (req, res) => {
+    const { currentPassword, newPassword } = req.body;
+    const adminId = req.adminId; // Ensure this is correctly set by the verifyToken middleware
+
+    try {
+        // Validate the input
+        if (!currentPassword || !newPassword) {
+            return res.status(400).json({ error: 'Current and new passwords are required' });
+        }
+
+        // Retrieve the admin's current password from the database
+        const [results] = await pool.query('SELECT password FROM Admin WHERE admin_id = ?', [adminId]);
+
+        if (results.length === 0) {
+            return res.status(404).json({ error: 'Admin not found' });
+        }
+
+        const storedPassword = results[0].password;
+
+        // Compare the provided current password with the stored hashed password
+        const isMatch = await bcrypt.compare(currentPassword, storedPassword);
+
+        if (!isMatch) {
+            return res.status(401).json({ error: 'Current password is incorrect' });
+        }
+
+        // Hash the new password
+        const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+
+        // Update the admin's password in the database
+        await pool.query('UPDATE Admin SET password = ? WHERE admin_id = ?', [hashedNewPassword, adminId]);
+
+        res.status(200).json({ message: 'Password updated successfully' });
+    } catch (error) {
+        console.error('Error changing password:', error);
+        res.status(500).json({ error: 'Server error' });
     }
 });
 
@@ -316,6 +357,7 @@ router.post('/', async (req, res) => {
         if (connection) connection.release();
     }
 });
+
 // Admin edit endpoint
 router.put('/:adminId', verifyToken, upload.single('image'), async (req, res) => {
     const adminId = req.params.adminId;
@@ -379,21 +421,62 @@ router.delete('/qrcodes/:id', verifyToken, (req, res) => {
     });
 });
 
-// Create a new product
-router.post('/products', verifyToken, upload.single('image'), (req, res) => {
-    const { Pname, price } = req.body;
+router.post('/create-employee', upload.single('image'), async (req, res) => {
+    const { username, password, fname, lname, mname, suffix, age, address } = req.body;
     const image = req.file ? req.file.path : null;
 
-    // Insert product into the database
-    pool.query('INSERT INTO Product (Pname, price, images) VALUES (?, ?, ?)',
-        [Pname, price, image],
-        (err, result) => {
-            if (err) {
-                return res.status(500).send('Error creating product');
-            }
-            res.status(201).send(`Product created with ID: ${result.insertId}`);
-        });
+    try {
+        // Ensure required fields are defined
+        if (!username || !password || !fname || !lname) {
+            return res.status(400).send('Missing required fields');
+        }
+
+        // Check if the employee already exists
+        const [existingEmployee] = await pool.query('SELECT * FROM Admin WHERE username = ?', [username]);
+
+        if (existingEmployee.length > 0) {
+            return res.status(409).send('Employee with this username already exists');
+        }
+
+        // Hash the password
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        // Insert the new employee into the database with role 'employee'
+        const [result] = await pool.query(
+            'INSERT INTO Admin (username, password, fname, lname, mname, suffix, age, address, images, role) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [username, hashedPassword, fname, lname, mname, suffix, age, address, image, 'employee']
+        );
+
+        if (result.affectedRows > 0) {
+            return res.status(201).send('Employee registered successfully');
+        } else {
+            throw new Error('Failed to register employee');
+        }
+    } catch (error) {
+        console.error('Error during employee registration:', error);
+        return res.status(500).send('Server error');
+    }
 });
+
+router.get('/employee', async (req, res) => {
+    try {
+      // Query to get admin with role 'employee'
+      const [rows] = await pool.query('SELECT * FROM admin WHERE role = ?', ['employee']);
+      
+      if (rows.length > 0) {
+        const employeeCount = rows.length;
+        res.status(200).json({
+          count: employeeCount,
+          employees: rows
+        });
+      } else {
+        res.status(404).json({ message: 'No employees found', count: 0 });
+      }
+    } catch (err) {
+      console.error('Error fetching employees:', err);
+      res.status(500).json({ error: 'Error fetching employees' });
+    }
+  });
 
 module.exports = router;
 

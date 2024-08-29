@@ -9,7 +9,8 @@ CREATE TABLE Admin (
     suffix VARCHAR(50),
     age INT,
     address VARCHAR(255),
-    images VARCHAR(255)
+    images VARCHAR(255),
+    role ENUM('admin', 'employee') DEFAULT 'employee'
 );
 
 /* Product table */
@@ -20,6 +21,7 @@ CREATE TABLE Product (
     images VARCHAR(255),
     category text,
     description text,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 );
 
 /* ProductVariant table */
@@ -37,4 +39,9 @@ CREATE TABLE QRCode (
     qr_id INT PRIMARY KEY AUTO_INCREMENT,
     product_id INT,
     FOREIGN KEY (product_id) REFERENCES Product(product_id)
+);
+
+CREATE TABLE ShopViews (
+    id INT PRIMARY KEY,
+    view_count INT DEFAULT 0
 );
