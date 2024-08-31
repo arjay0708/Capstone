@@ -1,6 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('./connection');
+const QRCode = require('qrcode');
+const qr = require('qr-image');
+const path = require('path');
+const fs = require('fs');
+
+const qrCodeDir = 'D:/Capstone/Capstone/qr-codes';
+
 
 // Retrieve all QR codes
 router.get('/', (req, res) => {
@@ -47,5 +54,19 @@ router.delete('/:id', (req, res) => {
         res.status(200).send('QR code deleted successfully');
     });
 });
+
+router.get('/qr-codes/:id', (req, res) => {
+    const { id } = req.params;
+    const qrCodePath = path.join('D:/Capstone/Capstone/qr-codes', `product_${id}.png`);
+  
+    // Check if the QR code file exists
+    if (fs.existsSync(qrCodePath)) {
+      res.setHeader('Content-Disposition', `attachment; filename=product_${id}.png`);
+      res.sendFile(qrCodePath);
+    } else {
+      res.status(404).send('QR code not found');
+    }
+  });
+  
 
 module.exports = router;

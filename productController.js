@@ -387,7 +387,7 @@ router.get('/', async (req, res) => {
         const products = results.reduce((acc, row) => {
             if (!acc[row.product_id]) {
                 acc[row.product_id] = {
-                    product_id: row.product_id,
+                    id: row.product_id,
                     Pname: row.Pname,
                     category: row.category,
                     description: row.description,
@@ -471,6 +471,7 @@ router.get('/:id', async (req, res) => {
             p.price AS productPrice, 
             p.images, 
             p.category,
+            p.created_at,
             p.description, 
             pv.gender, 
             pv.size, 
@@ -501,7 +502,8 @@ router.get('/:id', async (req, res) => {
                     productPrice: row.productPrice,
                     description: row.description,
                     category: row.category,
-                    images: JSON.parse(row.images).map(image => `uploads/${path.basename(image)}`),
+                    date: row.created_at,
+                    images: JSON.parse(row.images).map(image => `/uploads/${path.basename(image)}`),
                     variants: []
                 };
             }
