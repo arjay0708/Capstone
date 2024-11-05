@@ -11,7 +11,7 @@ const pool = require('./connection'); // Adjust the path to your database connec
 // Set up storage for Multer
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
-        cb(null, 'D:/Capstone/Capstone/uploads'); // Ensure this path is correct and exists
+        cb(null, 'D:/Capstone/uploads'); // Ensure this path is correct and exists
     },
     filename: function (req, file, cb) {
         cb(null, Date.now() + path.extname(file.originalname));

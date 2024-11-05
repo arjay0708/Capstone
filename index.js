@@ -8,6 +8,8 @@ const adminRouter = require('./adminController.js');
 const productRouter = require('./productController.js');
 const qrcodeRouter = require('./qrcodeController.js');
 const countsRouter = require('./viewcounter.js');
+const customerRouter = require ('./customerController.js');
+
 
 const path = require('path');
 
@@ -27,6 +29,7 @@ app.use('/admins', adminRouter);
 app.use('/products', productRouter);
 app.use('/qrcodes', qrcodeRouter);
 app.use('/counts', countsRouter);
+app.use ('/customer', customerRouter);
 
 
 // Serve static files from the uploads directory
