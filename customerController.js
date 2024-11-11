@@ -3,6 +3,7 @@ const router = express.Router();
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const pool = require('./connection'); // Make sure this points to your database connection
+const { authMiddleware, roleCheckMiddleware } = require('./authMiddleware'); // Adjust the path if necessary
 require('dotenv').config(); // Ensure you have dotenv installed
 
 // Customer registration endpoint
@@ -42,37 +43,66 @@ router.post('/register', async (req, res) => {
     }
 });
 
-// Customer login endpoint
-router.post('/login', async (req, res) => {
-    const { username, password } = req.body;
+    // Customer login endpoint
+    router.post('/login', async (req, res) => {
+        const { username, password } = req.body;
 
-    try {
-        if (!username || !password) {
-            return res.status(400).send('Username and password are required');
+        try {
+            if (!username || !password) {
+                return res.status(400).send('Username and password are required');
+            }
+
+            // Query to get the customer by username and ensure the role is 'customer'
+            const [results] = await pool.query(
+                'SELECT * FROM Accounts WHERE username = ? AND role = "customer"', 
+                [username]
+            );
+
+            if (results.length === 0) {
+                return res.status(401).send('Invalid username or password');
+            }
+
+            const match = await bcrypt.compare(password, results[0].password);
+            if (!match) {
+                return res.status(401).send('Invalid username or password');
+            }
+
+            const token = jwt.sign({ accountId: results[0].account_id }, process.env.JWT_SECRET_KEY, { expiresIn: '1h' }); // Use environment variable for secret key
+
+            res.status(200).json({ token });
+        } catch (error) {
+            console.error('Error during authentication:', error);
+            res.status(500).send('Server error');
         }
+        
+    });
 
-        // Query to get the customer by username and ensure the role is 'customer'
-        const [results] = await pool.query(
-            'SELECT * FROM Accounts WHERE username = ? AND role = "customer"', 
-            [username]
-        );
-
-        if (results.length === 0) {
-            return res.status(401).send('Invalid username or password');
+    router.get('/buyer-details', authMiddleware, async (req, res) => {
+        const account_id = req.user.account_id; // Retrieved from the middleware (authenticated user)
+    
+        try {
+            // Query to get the buyer's details using the account_id
+            const [results] = await pool.query(
+                'SELECT fname, lname, mname, address, phone FROM Accounts WHERE account_id = ?',
+                [account_id]
+            );
+    
+            if (results.length === 0) {
+                return res.status(404).json({ message: 'Buyer not found.' });
+            }
+    
+            // Sending back the buyer's details
+            res.status(200).json({
+                fname: results[0].fname,
+                lname: results[0].lname,
+                mname: results[0].mname,
+                address: results[0].address,
+                phone: results[0].phone
+            });
+        } catch (error) {
+            console.error('Error retrieving buyer details:', error);
+            res.status(500).json({ error: 'Error retrieving buyer details' });
         }
-
-        const match = await bcrypt.compare(password, results[0].password);
-        if (!match) {
-            return res.status(401).send('Invalid username or password');
-        }
-
-        const token = jwt.sign({ accountId: results[0].account_id }, process.env.JWT_SECRET_KEY, { expiresIn: '1h' }); // Use environment variable for secret key
-
-        res.status(200).json({ token });
-    } catch (error) {
-        console.error('Error during authentication:', error);
-        res.status(500).send('Server error');
-    }
-});
+    });
 
 module.exports = router;

@@ -5,6 +5,7 @@ const path = require('path');
 const cors = require('cors');
 const fs = require('fs');
 const qr = require('qr-image');
+const { authMiddleware, roleCheckMiddleware } = require('./authMiddleware');
 const pool = require('./connection'); // Adjust the path to your database connection file
 
 
@@ -527,6 +528,201 @@ router.get('/:id', async (req, res) => {
         if (connection) connection.release();
     }
 });
+
+
+
+router.put('/ship-order/:order_id',  authMiddleware, roleCheckMiddleware(['admin', 'employee']), async (req, res) => {
+    const { order_id } = req.params;
+
+    try {
+        // Check if the order exists and get the current status
+        const [order] = await pool.query('SELECT * FROM Orders WHERE order_id = ?', [order_id]);
+
+        if (order.length === 0) {
+            return res.status(404).json({ message: 'Order not found.' });
+        }
+
+        // Check if the order is already shipped or delivered
+        if (order[0].order_status === 'Shipped' || order[0].order_status === 'Delivered') {
+            return res.status(400).json({ message: `Order is already ${order[0].order_status.toLowerCase()}.` });
+        }
+
+        // Update the order status to 'Shipped'
+        await pool.query('UPDATE Orders SET order_status = ? WHERE order_id = ?', ['Shipped', order_id]);
+
+        res.status(200).json({ message: 'Order status updated to Shipped' });
+    } catch (error) {
+        console.error('Error updating order status:', error);
+        res.status(500).json({ error: 'Error updating order status' });
+    }
+});
+
+router.post('/create-order', authMiddleware, async (req, res) => {
+    const account_id = req.user.account_id;
+
+    try {
+        const [cart] = await pool.query('SELECT * FROM Cart WHERE account_id = ?', [account_id]);
+
+        if (cart.length === 0) {
+            return res.status(404).json({ message: 'No cart found for this account' });
+        }
+
+        const cart_id = cart[0].cart_id;
+
+        const [cartItems] = await pool.query(
+            `SELECT 
+                CartItem.product_variant_id,
+                CartItem.quantity AS order_quantity,
+                ProductVariant.quantity AS available_quantity,
+                Product.price
+             FROM CartItem
+             JOIN ProductVariant ON CartItem.product_variant_id = ProductVariant.variant_id
+             JOIN Product ON ProductVariant.product_id = Product.product_id
+             WHERE CartItem.cart_id = ?`,
+            [cart_id]
+        );
+
+        if (cartItems.length === 0) {
+            return res.status(400).json({ message: 'Your cart is empty. Cannot place an order.' });
+        }
+
+        let totalAmount = 0;
+        for (const item of cartItems) {
+            if (item.order_quantity > item.available_quantity) {
+                return res.status(400).json({
+                    message: `Insufficient stock for item ID ${item.product_variant_id}.`
+                });
+            }
+            totalAmount += item.price * item.order_quantity;
+        }
+
+        const [newOrder] = await pool.query(
+            'INSERT INTO Orders (account_id, total_amount) VALUES (?, ?)',
+            [account_id, totalAmount]
+        );
+        const order_id = newOrder.insertId;
+
+        for (const item of cartItems) {
+            await pool.query(
+                'INSERT INTO OrderItem (order_id, product_variant_id, quantity, price_at_purchase) VALUES (?, ?, ?, ?)',
+                [order_id, item.product_variant_id, item.order_quantity, item.price]
+            );
+
+            await pool.query(
+                'UPDATE ProductVariant SET quantity = quantity - ? WHERE variant_id = ?',
+                [item.order_quantity, item.product_variant_id]
+            );
+        }
+
+        await pool.query('DELETE FROM CartItem WHERE cart_id = ?', [cart_id]);
+
+        res.status(200).json({
+            message: 'Order placed successfully',
+            order_id,
+            totalAmount
+        });
+    } catch (error) {
+        console.error('Error placing order:', error);
+        res.status(500).json({ error: 'Error placing order' });
+    }
+});
+
+// Read all orders for the logged-in user
+router.get('/orders', authMiddleware, async (req, res) => {
+    const account_id = req.user.account_id;
+
+    try {
+        const [orders] = await pool.query('SELECT * FROM Orders WHERE account_id = ?', [account_id]);
+        res.status(200).json(orders);
+    } catch (error) {
+        console.error('Error retrieving orders:', error);
+        res.status(500).json({ error: 'Error retrieving orders' });
+    }
+});
+
+// Read details of a specific order
+router.get('/order/:id', authMiddleware, async (req, res) => {
+    const account_id = req.user.account_id;
+    const order_id = req.params.id;
+
+    try {
+        const [order] = await pool.query('SELECT * FROM Orders WHERE order_id = ? AND account_id = ?', [order_id, account_id]);
+
+        if (order.length === 0) {
+            return res.status(404).json({ message: 'Order not found' });
+        }
+
+        const [orderItems] = await pool.query(
+            `SELECT 
+                OrderItem.order_item_id,
+                OrderItem.product_variant_id,
+                OrderItem.quantity,
+                OrderItem.price_at_purchase,
+                Product.Pname
+             FROM OrderItem
+             JOIN ProductVariant ON OrderItem.product_variant_id = ProductVariant.variant_id
+             JOIN Product ON ProductVariant.product_id = Product.product_id
+             WHERE OrderItem.order_id = ?`,
+            [order_id]
+        );
+
+        res.status(200).json({
+            order: order[0],
+            items: orderItems
+        });
+    } catch (error) {
+        console.error('Error retrieving order details:', error);
+        res.status(500).json({ error: 'Error retrieving order details' });
+    }
+});
+
+// Update an order status
+router.put('/order/:id/status', authMiddleware, async (req, res) => {
+    const order_id = req.params.id;
+    const { status } = req.body; // Expect status to be one of 'Pending', 'Shipped', 'Delivered', 'Cancelled'
+
+    try {
+        const [result] = await pool.query(
+            'UPDATE Orders SET order_status = ? WHERE order_id = ?',
+            [status, order_id]
+        );
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ message: 'Order not found or status not updated' });
+        }
+
+        res.status(200).json({ message: 'Order status updated successfully' });
+    } catch (error) {
+        console.error('Error updating order status:', error);
+        res.status(500).json({ error: 'Error updating order status' });
+    }
+});
+
+// Delete an order (cancel the order)
+router.delete('/order/:id', authMiddleware, async (req, res) => {
+    const account_id = req.user.account_id;
+    const order_id = req.params.id;
+
+    try {
+        const [order] = await pool.query(
+            'SELECT * FROM Orders WHERE order_id = ? AND account_id = ? AND order_status = "Pending"',
+            [order_id, account_id]
+        );
+
+        if (order.length === 0) {
+            return res.status(400).json({ message: 'Order not found or cannot be cancelled' });
+        }
+
+        await pool.query('DELETE FROM Orders WHERE order_id = ?', [order_id]);
+        await pool.query('DELETE FROM OrderItem WHERE order_id = ?', [order_id]);
+
+        res.status(200).json({ message: 'Order cancelled successfully' });
+    } catch (error) {
+        console.error('Error cancelling order:', error);
+        res.status(500).json({ error: 'Error cancelling order' });
+    }
+});
+
 
 
 

@@ -45,9 +45,10 @@ CREATE TABLE QRCode (
 );
 
 /* ShopViews table */
-CREATE TABLE ShopViews (
-    id INT PRIMARY KEY,
-    view_count INT DEFAULT 0
+CREATE TABLE Shopviews (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    view_count INT DEFAULT 0,
+    view_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 /* Cart table */

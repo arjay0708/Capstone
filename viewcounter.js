@@ -10,7 +10,7 @@ router.post('/increment-view', async (req, res) => {
         // Check if the 'viewedShop' cookie is set
         if (!req.cookies.viewedShop) {
             // Insert a new view record with the current timestamp
-            const [results] = await pool.query('INSERT INTO ShopViews (view_count, view_date) VALUES (1, NOW())');
+            const [results] = await pool.query('INSERT INTO Shopviews (view_count, view_date) VALUES (1, NOW())');
             
             // Set a cookie to prevent counting this user again in this session
             res.cookie('viewedShop', 'true', { maxAge: 3600000 }); // Cookie expires in 1 hour
@@ -29,7 +29,7 @@ router.post('/increment-view', async (req, res) => {
 router.get('/metrics', async (req, res) => {
     try {
         // Query to get the total view count
-        const totalViewsQuery = 'SELECT COUNT(*) AS total_views FROM ShopViews';
+        const totalViewsQuery = 'SELECT COUNT(*) AS total_views FROM Shopviews';
         const [totalViewsResults] = await pool.query(totalViewsQuery);
         const totalViews = totalViewsResults[0] ? totalViewsResults[0].total_views : 0;
 

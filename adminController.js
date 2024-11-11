@@ -8,6 +8,8 @@ const path = require('path');
 const fs = require('fs');
 const qr = require('qr-image'); // Ensure you have this library installed
 require('dotenv').config(); // Ensure you have dotenv installed
+const { authMiddleware, roleCheckMiddleware } = require('./authMiddleware'); // Adjust the path if necessary
+
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -37,7 +39,7 @@ function verifyToken(req, res, next) {
             console.error('Token Verification Error:', err); // Log verification errors
             return res.status(401).send('Invalid token');
         }
-        req.adminId = decoded.adminId;
+        req.accountId = decoded.accountId;
         next();
     });
 }
@@ -108,9 +110,10 @@ router.post('/login', async (req, res) => {
         }
 
         // If the credentials are valid, generate a JWT token
-        const token = jwt.sign({ adminId: results[0].admin_id, role: role }, process.env.JWT_SECRET_KEY, { expiresIn: '1h' }); // Use environment variable for secret key
+        const token = jwt.sign({ accountId: results[0].account_id, role: role }, process.env.JWT_SECRET_KEY, { expiresIn: '1h' }); // Use environment variable for secret key
 
-        res.status(200).json({ token });
+        res.status(200).json({ token, role });
+
     } catch (error) {
         console.error('Error during authentication:', error);
         res.status(500).send('Server error');
@@ -119,40 +122,39 @@ router.post('/login', async (req, res) => {
 
 router.put('/changepassword', verifyToken, async (req, res) => {
     const { currentPassword, newPassword } = req.body;
-    const adminId = req.adminId; // Ensure this is correctly set by the verifyToken middleware
+    const accountId = req.accountId;
+
+    console.log("Account ID:", accountId);  // Log Account ID
 
     try {
-        // Validate the input
         if (!currentPassword || !newPassword) {
             return res.status(400).json({ error: 'Current and new passwords are required' });
         }
 
-        // Retrieve the admin's current password from the database
-        const [results] = await pool.query('SELECT password FROM Admin WHERE admin_id = ?', [adminId]);
+        const [results] = await pool.query('SELECT password FROM accounts WHERE account_id = ?', [accountId]);
+
 
         if (results.length === 0) {
-            return res.status(404).json({ error: 'Admin not found' });
+            return res.status(404).json({ error: 'Account not found' });
         }
 
         const storedPassword = results[0].password;
-
-        // Compare the provided current password with the stored hashed password
         const isMatch = await bcrypt.compare(currentPassword, storedPassword);
+
+        console.log("Password match:", isMatch);  // Log password match outcome
 
         if (!isMatch) {
             return res.status(401).json({ error: 'Current password is incorrect' });
         }
 
-        // Hash the new password
         const hashedNewPassword = await bcrypt.hash(newPassword, 10);
 
-        // Update the admin's password in the database
-        await pool.query('UPDATE Admin SET password = ? WHERE admin_id = ?', [hashedNewPassword, adminId]);
+        await pool.query('UPDATE accounts SET password = ? WHERE account_id = ?', [hashedNewPassword, accountId]);
 
         res.status(200).json({ message: 'Password updated successfully' });
     } catch (error) {
-        console.error('Error changing password:', error);
-        res.status(500).json({ error: 'Server error' });
+        console.error('Error changing password:', error);  // Log detailed error
+        res.status(500).json({ error: 'Server error. Please try again later.' });
     }
 });
 
@@ -280,47 +282,48 @@ router.delete('/qrcodes/:id', verifyToken, (req, res) => {
     });
 });
 
-router.post('/create-employee', upload.single('image'), async (req, res) => {
-    const { username, password, fname, lname, mname, suffix, age, address } = req.body;
+router.post('/create-employee', authMiddleware, roleCheckMiddleware('admin'), upload.single('image'), async (req, res) => {
+    const { username, password, fname, lname, mname, suffix, age, address, email } = req.body;
     const image = req.file ? req.file.path : null;
 
     try {
         // Ensure required fields are defined
-        if (!username || !password || !fname || !lname) {
-            return res.status(400).send('Missing required fields');
+        if (!username || !password || !fname || !lname || !email) {
+            return res.status(400).json({ error: 'Missing required fields' });
         }
 
         // Check if the employee already exists
-        const [existingEmployee] = await pool.query('SELECT * FROM Admin WHERE username = ?', [username]);
+        const [existingEmployee] = await pool.query('SELECT * FROM Accounts WHERE username = ?', [username]);
 
         if (existingEmployee.length > 0) {
-            return res.status(409).send('Employee with this username already exists');
+            return res.status(409).json({ error: 'Employee with this username already exists' });
         }
 
         // Hash the password
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        // Insert the new employee into the database with role 'employee'
+        // Insert the new employee into the Accounts table with role 'employee'
         const [result] = await pool.query(
-            'INSERT INTO Admin (username, password, fname, lname, mname, suffix, age, address, images, role) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [username, hashedPassword, fname, lname, mname, suffix, age, address, image, 'employee']
+            `INSERT INTO Accounts (username, password, fname, lname, mname, suffix, age, address, email, images, role) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [username, hashedPassword, fname, lname, mname, suffix, age, address, email, image, 'employee']
         );
 
         if (result.affectedRows > 0) {
-            return res.status(201).send('Employee registered successfully');
+            return res.status(201).json({ message: 'Employee registered successfully' });
         } else {
             throw new Error('Failed to register employee');
         }
     } catch (error) {
         console.error('Error during employee registration:', error);
-        return res.status(500).send('Server error');
+        return res.status(500).json({ error: 'Server error' });
     }
 });
 
 router.get('/employee', async (req, res) => {
     try {
-      // Query to get admin with role 'employee'
-      const [rows] = await pool.query('SELECT * FROM admin WHERE role = ?', ['employee']);
+      // Query to get all accounts with role 'employee' including name details
+      const [rows] = await pool.query('SELECT username, fname, lname, email, age, address FROM accounts WHERE role = ?', ['employee']);
       
       if (rows.length > 0) {
         const employeeCount = rows.length;
@@ -337,5 +340,61 @@ router.get('/employee', async (req, res) => {
     }
   });
 
+  router.put('/employee/:id', authMiddleware, roleCheckMiddleware('admin'), upload.single('image'), async (req, res) => {
+    const { id } = req.params;
+    const { fname, lname, mname, suffix, age, address, email } = req.body;
+    const image = req.file ? req.file.path : null;
+
+    try {
+        // Check if the employee exists
+        const [existingEmployee] = await pool.query('SELECT * FROM Accounts WHERE account_id = ?', [id]);
+
+        if (existingEmployee.length === 0) {
+            return res.status(404).json({ error: 'Employee not found' });
+        }
+
+        // Update employee information in the database (excluding username and password)
+        const [result] = await pool.query(
+            `UPDATE Accounts 
+             SET fname = ?, lname = ?, mname = ?, suffix = ?, age = ?, address = ?, email = ?, images = COALESCE(?, images)
+             WHERE account_id = ?`,
+            [fname, lname, mname, suffix, age, address, email, image, id]
+        );
+
+        if (result.affectedRows > 0) {
+            return res.status(200).json({ message: 'Employee updated successfully' });
+        } else {
+            throw new Error('Failed to update employee');
+        }
+    } catch (error) {
+        console.error('Error updating employee:', error);
+        return res.status(500).json({ error: 'Server error' });
+    }
+});
+
+router.delete('/employee/:id', authMiddleware, roleCheckMiddleware('admin'), async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        // Check if the employee exists
+        const [existingEmployee] = await pool.query('SELECT * FROM Accounts WHERE account_id = ?', [id]);
+
+        if (existingEmployee.length === 0) {
+            return res.status(404).json({ error: 'Employee not found' });
+        }
+
+        // Delete the employee from the database
+        const [result] = await pool.query('DELETE FROM Accounts WHERE account_id = ?', [id]);
+
+        if (result.affectedRows > 0) {
+            return res.status(200).json({ message: 'Employee deleted successfully' });
+        } else {
+            throw new Error('Failed to delete employee');
+        }
+    } catch (error) {
+        console.error('Error deleting employee:', error);
+        return res.status(500).json({ error: 'Server error' });
+    }
+});
 module.exports = router;
 
