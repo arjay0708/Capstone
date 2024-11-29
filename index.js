@@ -2,7 +2,6 @@
 const express = require('express');
 const app = express();
 const cors = require('cors');
-
 const bodyParser = require('body-parser');
 const adminRouter = require('./adminController.js');
 const productRouter = require('./productController.js');
@@ -10,8 +9,6 @@ const qrcodeRouter = require('./qrcodeController.js');
 const countsRouter = require('./viewcounter.js');
 const customerRouter = require ('./customerController.js');
 const cartRouter = require ('./cart.js');
-
-
 const path = require('path');
 
 app.use(cors({

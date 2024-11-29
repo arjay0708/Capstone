@@ -529,6 +529,71 @@ router.get('/:id', async (req, res) => {
     }
 });
 
+router.get('/orders/all', async (req, res) => {
+    try {
+        // Fetch all orders and join with user details
+        const [orders] = await pool.query(`
+            SELECT 
+                Orders.*,
+                 CONCAT(accounts.fname, ' ', accounts.lname) AS name,
+                accounts.email AS email,
+                accounts.phone AS phone,
+                accounts.address AS address
+            FROM Orders
+            JOIN accounts ON Orders.account_id = accounts.account_id  -- Assuming 'account_id' links to 'user_id' in 'Users' table
+            ORDER BY Orders.created_at DESC
+        `);
+
+        if (orders.length === 0) {
+            return res.status(404).json({ message: 'No orders found' });
+        }
+
+        // Fetch associated items for all orders
+        const orderIds = orders.map(order => order.order_id);
+        if (!orderIds.length) {
+            return res.status(404).json({ message: 'No order items found' });
+        }
+
+        const [orderItems] = await pool.query(
+            `SELECT 
+                OrderItem.order_item_id,
+                OrderItem.order_id,
+                OrderItem.product_variant_id,
+                OrderItem.quantity,
+                OrderItem.price_at_purchase,
+                Product.Pname,
+                Product.images
+             FROM OrderItem
+             JOIN ProductVariant ON OrderItem.product_variant_id = ProductVariant.variant_id
+             JOIN Product ON ProductVariant.product_id = Product.product_id
+             WHERE OrderItem.order_id IN (?) 
+             ORDER BY OrderItem.order_id`,
+            [orderIds]
+        );
+
+        // Organize items under their respective orders
+        const ordersWithItems = orders.map(order => ({
+            ...order,
+            customer_name: order.customer_name,
+            customer_email: order.customer_email,
+            customer_phone: order.customer_phone,
+            customer_address: order.customer_address,
+            items: orderItems
+                .filter(item => item.order_id === order.order_id)
+                .map(item => ({
+                    ...item,
+                    // Parse JSON images and generate paths for each image
+                    images: JSON.parse(item.images).map(image => `/uploads/${image}`), // assuming images are stored under /uploads/
+                    price_at_purchase: parseFloat(item.price_at_purchase) // Ensure it's a number
+                }))
+        }));
+
+        res.status(200).json(ordersWithItems);
+    } catch (error) {
+        console.error('Error retrieving all orders:', error);
+        res.status(500).json({ error: 'Error retrieving all orders' });
+    }
+});
 
 
 router.put('/ship-order/:order_id',  authMiddleware, roleCheckMiddleware(['admin', 'employee']), async (req, res) => {
@@ -640,36 +705,103 @@ router.get('/orders', authMiddleware, async (req, res) => {
     }
 });
 
-// Read details of a specific order
-router.get('/order/:id', authMiddleware, async (req, res) => {
+
+router.get('/order/:id', authMiddleware, roleCheckMiddleware(['admin', 'employee']), async (req, res) => {
     const account_id = req.user.account_id;
     const order_id = req.params.id;
 
     try {
-        const [order] = await pool.query('SELECT * FROM Orders WHERE order_id = ? AND account_id = ?', [order_id, account_id]);
+        // Check if the user is admin/employee, and allow them to see any order
+        if (req.user.role === 'admin' || req.user.role === 'employee') {
+            const [order] = await pool.query(`
+                SELECT 
+                    Orders.*,
+                    CONCAT(accounts.fname, ' ', accounts.lname) AS name,
+                    accounts.email,
+                    accounts.phone,
+                    accounts.address
+                FROM Orders
+                JOIN accounts ON Orders.account_id = accounts.account_id
+                WHERE Orders.order_id = ?
+            `, [order_id]);
+            
+            if (order.length === 0) {
+                return res.status(404).json({ message: 'Order not found' });
+            }
 
-        if (order.length === 0) {
-            return res.status(404).json({ message: 'Order not found' });
+            // Fetch items for the order
+            const [orderItems] = await pool.query(`
+                SELECT 
+                    OrderItem.order_item_id,
+                    OrderItem.product_variant_id,
+                    OrderItem.quantity,
+                    OrderItem.price_at_purchase,
+                    Product.Pname,
+                    Product.images
+                FROM OrderItem
+                JOIN ProductVariant ON OrderItem.product_variant_id = ProductVariant.variant_id
+                JOIN Product ON ProductVariant.product_id = Product.product_id
+                WHERE OrderItem.order_id = ?
+            `, [order_id]);
+
+            // Map images and ensure price_at_purchase is a number
+            const itemsWithImages = orderItems.map(item => ({
+                ...item,
+                images: JSON.parse(item.images).map(image => `/uploads/${image}`), // Assuming images are stored under /uploads/
+                price_at_purchase: parseFloat(item.price_at_purchase) // Ensure it's a number
+            }));
+
+            // Send the response
+            return res.status(200).json({
+                order: order[0],
+                items: itemsWithImages
+            });
+        } else {
+            // For non-admin users, ensure that the order belongs to the current user
+            const [order] = await pool.query(`
+                SELECT 
+                    Orders.*,
+                    CONCAT(accounts.fname, ' ', accounts.lname) AS name, 
+                    accounts.email,
+                    accounts.phone,
+                    accounts.address
+                FROM Orders
+                JOIN accounts ON Orders.account_id = accounts.account_id
+                WHERE Orders.order_id = ? AND Orders.account_id = ?
+            `, [order_id, account_id]);
+
+            if (order.length === 0) {
+                return res.status(404).json({ message: 'Order not found or unauthorized access' });
+            }
+
+            // Fetch items for the order
+            const [orderItems] = await pool.query(`
+                SELECT 
+                    OrderItem.order_item_id,
+                    OrderItem.product_variant_id,
+                    OrderItem.quantity,
+                    OrderItem.price_at_purchase,
+                    Product.Pname,
+                    Product.images
+                FROM OrderItem
+                JOIN ProductVariant ON OrderItem.product_variant_id = ProductVariant.variant_id
+                JOIN Product ON ProductVariant.product_id = Product.product_id
+                WHERE OrderItem.order_id = ?
+            `, [order_id]);
+
+            // Map images and ensure price_at_purchase is a number
+            const itemsWithImages = orderItems.map(item => ({
+                ...item,
+                images: JSON.parse(item.images).map(image => `/uploads/${image}`), // Assuming images are stored under /uploads/
+                price_at_purchase: parseFloat(item.price_at_purchase) // Ensure it's a number
+            }));
+
+            // Send the response
+            return res.status(200).json({
+                order: order[0],
+                items: itemsWithImages
+            });
         }
-
-        const [orderItems] = await pool.query(
-            `SELECT 
-                OrderItem.order_item_id,
-                OrderItem.product_variant_id,
-                OrderItem.quantity,
-                OrderItem.price_at_purchase,
-                Product.Pname
-             FROM OrderItem
-             JOIN ProductVariant ON OrderItem.product_variant_id = ProductVariant.variant_id
-             JOIN Product ON ProductVariant.product_id = Product.product_id
-             WHERE OrderItem.order_id = ?`,
-            [order_id]
-        );
-
-        res.status(200).json({
-            order: order[0],
-            items: orderItems
-        });
     } catch (error) {
         console.error('Error retrieving order details:', error);
         res.status(500).json({ error: 'Error retrieving order details' });
