@@ -13,7 +13,10 @@ CREATE TABLE Accounts (
     phone VARCHAR(50),
     images VARCHAR(255),
     role ENUM('admin', 'employee', 'customer') DEFAULT 'customer', -- Added 'customer' role
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    verification_token VARCHAR(255) NULL,
+    is_verified BOOLEAN DEFAULT FALSE
+
 );
 
 /* Product table */

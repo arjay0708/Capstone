@@ -322,8 +322,8 @@ router.post('/create-employee', authMiddleware, roleCheckMiddleware('admin'), up
 
 router.get('/employee', async (req, res) => {
     try {
-      // Query to get all accounts with role 'employee' including name details
-      const [rows] = await pool.query('SELECT username, fname, lname, email, age, address FROM accounts WHERE role = ?', ['employee']);
+      // Query to get all accounts with role 'employee', including the account_id
+      const [rows] = await pool.query('SELECT account_id, username, fname, lname, email, age, address FROM accounts WHERE role = ?', ['employee']);
       
       if (rows.length > 0) {
         const employeeCount = rows.length;
@@ -372,19 +372,19 @@ router.get('/employee', async (req, res) => {
     }
 });
 
-router.delete('/employee/:id', authMiddleware, roleCheckMiddleware('admin'), async (req, res) => {
-    const { id } = req.params;
+router.delete('/employee/:account_id', authMiddleware, roleCheckMiddleware('admin'), async (req, res) => {
+    const { account_id } = req.params;  // Using account_id here instead of id
 
     try {
         // Check if the employee exists
-        const [existingEmployee] = await pool.query('SELECT * FROM Accounts WHERE account_id = ?', [id]);
+        const [existingEmployee] = await pool.query('SELECT * FROM Accounts WHERE account_id = ?', [account_id]);
 
         if (existingEmployee.length === 0) {
             return res.status(404).json({ error: 'Employee not found' });
         }
 
         // Delete the employee from the database
-        const [result] = await pool.query('DELETE FROM Accounts WHERE account_id = ?', [id]);
+        const [result] = await pool.query('DELETE FROM Accounts WHERE account_id = ?', [account_id]);
 
         if (result.affectedRows > 0) {
             return res.status(200).json({ message: 'Employee deleted successfully' });
