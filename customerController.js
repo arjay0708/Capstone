@@ -38,20 +38,26 @@ async function sendVerificationEmail(email, fname, verificationToken) {
 
 // Customer registration endpoint
 router.post('/register', async (req, res) => {
-    const { username, password, email, fname, lname } = req.body;
+    const { username, password, email, fname, lname, address, age, phone } = req.body;
 
-    if (!username || !password || !email || !fname || !lname) {
+    // Validate required fields
+    if (!username || !password || !email || !fname || !lname || !address || !age || !phone) {
         return res.status(400).send('Missing required fields');
     }
 
     try {
-        // Check if the email already exists in the Accounts table
-        const [existingAccount] = await pool.query('SELECT * FROM Accounts WHERE email = ?', [email]);
-        if (existingAccount.length > 0) {
+        // Check if the email or username already exists in the Accounts table
+        const [existingEmail] = await pool.query('SELECT * FROM Accounts WHERE email = ?', [email]);
+        if (existingEmail.length > 0) {
             return res.status(409).send('Email already in use');
         }
 
-        // Hash password before saving to database
+        const [existingUsername] = await pool.query('SELECT * FROM Accounts WHERE username = ?', [username]);
+        if (existingUsername.length > 0) {
+            return res.status(409).send('Username already in use');
+        }
+
+        // Hash password before saving to the database
         const hashedPassword = await bcrypt.hash(password, 12);
 
         // Generate a unique verification token
@@ -59,14 +65,14 @@ router.post('/register', async (req, res) => {
 
         // Insert new account into the Accounts table
         const [result] = await pool.query(
-            'INSERT INTO Accounts (username, password, email, fname, lname, verification_token, is_verified) VALUES (?, ?, ?, ?, ?, ?, ?)',
-            [username, hashedPassword, email, fname, lname, verificationToken, false]
+            'INSERT INTO Accounts (username, password, email, fname, lname, address, age, phone, verification_token, is_verified) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [username, hashedPassword, email, fname, lname, address, age, phone, verificationToken, false]
         );
 
         if (result.affectedRows > 0) {
             // Send verification email with a link containing the token
             await sendVerificationEmail(email, fname, verificationToken);
-            return res.status(201).send('Registration successful. Please verify your email.');
+            return res.status(201).json({ message: 'Registration successful. Please verify your email.' });
         } else {
             return res.status(500).send('Error registering account');
         }
