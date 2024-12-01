@@ -596,11 +596,17 @@ router.get('/orders/all', async (req, res) => {
 });
 
 
-router.put('/ship-order/:order_id',  authMiddleware, roleCheckMiddleware(['admin', 'employee']), async (req, res) => {
+router.put('/ship-order/:order_id', authMiddleware, roleCheckMiddleware(['admin', 'employee']), async (req, res) => {
     const { order_id } = req.params;
+    const { tracking_number, carrier } = req.body;
+
+    // Validate inputs
+    if (!tracking_number || !carrier) {
+        return res.status(400).json({ message: 'Tracking number and carrier are required.' });
+    }
 
     try {
-        // Check if the order exists and get the current status
+        // Check if the order exists
         const [order] = await pool.query('SELECT * FROM Orders WHERE order_id = ?', [order_id]);
 
         if (order.length === 0) {
@@ -612,13 +618,16 @@ router.put('/ship-order/:order_id',  authMiddleware, roleCheckMiddleware(['admin
             return res.status(400).json({ message: `Order is already ${order[0].order_status.toLowerCase()}.` });
         }
 
-        // Update the order status to 'Shipped'
-        await pool.query('UPDATE Orders SET order_status = ? WHERE order_id = ?', ['Shipped', order_id]);
+        // Update the order status, tracking number, and carrier
+        await pool.query(
+            'UPDATE Orders SET order_status = ?, tracking_number = ?, carrier = ? WHERE order_id = ?',
+            ['Shipped', tracking_number, carrier, order_id]
+        );
 
-        res.status(200).json({ message: 'Order status updated to Shipped' });
+        res.status(200).json({ message: 'Order status updated to Shipped with tracking information.' });
     } catch (error) {
         console.error('Error updating order status:', error);
-        res.status(500).json({ error: 'Error updating order status' });
+        res.status(500).json({ error: 'Error updating order status.' });
     }
 });
 
