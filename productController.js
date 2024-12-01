@@ -174,7 +174,36 @@ router.put('/:id', upload.array('images'), (req, res) => {
     });
 });
 
-
+router.get('/latest', async (req, res) => {
+    try {
+      const query = `
+        SELECT 
+          p.product_id, 
+          p.Pname, 
+          p.price AS productPrice, 
+          p.images, 
+          p.category,
+          p.created_at,
+          p.description 
+        FROM Product p
+        ORDER BY p.created_at DESC
+        LIMIT 4
+      `;
+  
+      const [latestProducts] = await pool.query(query);
+  
+      // Parse image URLs
+      const productsWithImages = latestProducts.map(product => {
+        product.images = JSON.parse(product.images).map(image => `/uploads/${path.basename(image)}`);
+        return product;
+      });
+  
+      res.status(200).json(productsWithImages);
+    } catch (error) {
+      console.error('Error fetching latest products:', error);
+      res.status(500).send('Server error');
+    }
+  });
 
 // DELETE a product and its variants
 router.delete('/:id', (req, res) => {
@@ -422,34 +451,34 @@ router.get('/', async (req, res) => {
 
 router.get('/category-counts', async (req, res) => {
     try {
-      const query = `
+        const query = `
         SELECT category, COUNT(*) AS count
         FROM product
         GROUP BY category
       `;
-      const connection = await pool.getConnection();
-      const [results] = await connection.query(query);
-      res.json(results);
+        const connection = await pool.getConnection();
+        const [results] = await connection.query(query);
+        res.json(results);
     } catch (error) {
-      console.error('Error fetching category counts:', error);
-      res.status(500).send('Server error');
+        console.error('Error fetching category counts:', error);
+        res.status(500).send('Server error');
     }
-  });
+});
 
 router.get('/categories', async (req, res) => {
     try {
         // Query to get distinct categories from the Product table
         const query = 'SELECT DISTINCT category FROM Product';
-        
+
         // Get a connection from the pool
         const connection = await pool.getConnection();
-        
+
         // Execute the query
         const [results] = await connection.query(query);
-        
+
         // Release the connection
         connection.release();
-        
+
         // Extract the categories from the results
         const categories = results.map(row => row.category);
 
@@ -596,7 +625,8 @@ router.get('/orders/all', async (req, res) => {
 });
 
 
-router.put('/ship-order/:order_id', authMiddleware, roleCheckMiddleware(['admin', 'employee']), async (req, res) => {
+
+ router.put('/ship-order/:order_id', authMiddleware, roleCheckMiddleware(['admin', 'employee']), async (req, res) => {
     const { order_id } = req.params;
     const { tracking_number, carrier } = req.body;
 
@@ -630,7 +660,6 @@ router.put('/ship-order/:order_id', authMiddleware, roleCheckMiddleware(['admin'
         res.status(500).json({ error: 'Error updating order status.' });
     }
 });
-
 router.post('/create-order', authMiddleware, async (req, res) => {
     const account_id = req.user.account_id;
 
@@ -733,7 +762,7 @@ router.get('/order/:id', authMiddleware, roleCheckMiddleware(['admin', 'employee
                 JOIN accounts ON Orders.account_id = accounts.account_id
                 WHERE Orders.order_id = ?
             `, [order_id]);
-            
+
             if (order.length === 0) {
                 return res.status(404).json({ message: 'Order not found' });
             }
