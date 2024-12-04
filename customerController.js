@@ -113,6 +113,7 @@ router.get('/verify-email/:token', async (req, res) => {
 });
 
 // Customer login endpoint
+
 router.post('/login', async (req, res) => {
     const { username, password } = req.body;
 
@@ -146,14 +147,19 @@ router.post('/login', async (req, res) => {
         // Generate a JWT token upon successful authentication
         const token = jwt.sign({ accountId: user.account_id }, process.env.JWT_SECRET_KEY, { expiresIn: '1h' });
 
-        // Send the token as a response
-        res.status(200).json({ token });
+        // Send the token, username, and profile image as a response
+        res.status(200).json({
+            token,
+            accountId: user.account_id,
+            role: user.role,
+            username: user.username,
+            profileImage: user.profile_image || '/assets/default-profile.png', // default image if not available
+        });
     } catch (error) {
         console.error('Error during authentication:', error);
         res.status(500).send('Server error');
     }
 });
-
 
 router.get('/buyer-details', authMiddleware, async (req, res) => {
     const account_id = req.user.account_id; // Retrieved from the middleware (authenticated user)

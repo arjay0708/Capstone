@@ -28,7 +28,7 @@ app.use('/products', productRouter);
 app.use('/qrcodes', qrcodeRouter);
 app.use('/counts', countsRouter);
 app.use ('/customer', customerRouter);
-app.use('/carts', cartRouter)
+app.use('/cart', cartRouter)
 
 
 // Serve static files from the uploads directory

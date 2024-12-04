@@ -174,6 +174,7 @@ router.put('/:id', upload.array('images'), (req, res) => {
     });
 });
 
+
 router.get('/latest', async (req, res) => {
     try {
       const query = `
@@ -195,7 +196,7 @@ router.get('/latest', async (req, res) => {
       // Parse image URLs
       const productsWithImages = latestProducts.map(product => {
         product.images = JSON.parse(product.images).map(image => `/uploads/${path.basename(image)}`);
-        return product;
+        return product;no
       });
   
       res.status(200).json(productsWithImages);
@@ -203,7 +204,8 @@ router.get('/latest', async (req, res) => {
       console.error('Error fetching latest products:', error);
       res.status(500).send('Server error');
     }
-  });
+});
+
 
 // DELETE a product and its variants
 router.delete('/:id', (req, res) => {
@@ -505,7 +507,8 @@ router.get('/:id', async (req, res) => {
             p.description, 
             pv.gender, 
             pv.size, 
-            pv.quantity
+            pv.quantity,
+            pv.variant_id
         FROM 
             Product p
         LEFT JOIN 
@@ -542,7 +545,8 @@ router.get('/:id', async (req, res) => {
                 acc.variants.push({
                     gender: row.gender,
                     size: row.size,
-                    quantity: row.quantity
+                    quantity: row.quantity,
+                    variant_id: row.variant_id
                 });
             }
 
@@ -660,75 +664,8 @@ router.get('/orders/all', async (req, res) => {
         res.status(500).json({ error: 'Error updating order status.' });
     }
 });
-router.post('/create-order', authMiddleware, async (req, res) => {
-    const account_id = req.user.account_id;
 
-    try {
-        const [cart] = await pool.query('SELECT * FROM Cart WHERE account_id = ?', [account_id]);
 
-        if (cart.length === 0) {
-            return res.status(404).json({ message: 'No cart found for this account' });
-        }
-
-        const cart_id = cart[0].cart_id;
-
-        const [cartItems] = await pool.query(
-            `SELECT 
-                CartItem.product_variant_id,
-                CartItem.quantity AS order_quantity,
-                ProductVariant.quantity AS available_quantity,
-                Product.price
-             FROM CartItem
-             JOIN ProductVariant ON CartItem.product_variant_id = ProductVariant.variant_id
-             JOIN Product ON ProductVariant.product_id = Product.product_id
-             WHERE CartItem.cart_id = ?`,
-            [cart_id]
-        );
-
-        if (cartItems.length === 0) {
-            return res.status(400).json({ message: 'Your cart is empty. Cannot place an order.' });
-        }
-
-        let totalAmount = 0;
-        for (const item of cartItems) {
-            if (item.order_quantity > item.available_quantity) {
-                return res.status(400).json({
-                    message: `Insufficient stock for item ID ${item.product_variant_id}.`
-                });
-            }
-            totalAmount += item.price * item.order_quantity;
-        }
-
-        const [newOrder] = await pool.query(
-            'INSERT INTO Orders (account_id, total_amount) VALUES (?, ?)',
-            [account_id, totalAmount]
-        );
-        const order_id = newOrder.insertId;
-
-        for (const item of cartItems) {
-            await pool.query(
-                'INSERT INTO OrderItem (order_id, product_variant_id, quantity, price_at_purchase) VALUES (?, ?, ?, ?)',
-                [order_id, item.product_variant_id, item.order_quantity, item.price]
-            );
-
-            await pool.query(
-                'UPDATE ProductVariant SET quantity = quantity - ? WHERE variant_id = ?',
-                [item.order_quantity, item.product_variant_id]
-            );
-        }
-
-        await pool.query('DELETE FROM CartItem WHERE cart_id = ?', [cart_id]);
-
-        res.status(200).json({
-            message: 'Order placed successfully',
-            order_id,
-            totalAmount
-        });
-    } catch (error) {
-        console.error('Error placing order:', error);
-        res.status(500).json({ error: 'Error placing order' });
-    }
-});
 
 // Read all orders for the logged-in user
 router.get('/orders', authMiddleware, async (req, res) => {
