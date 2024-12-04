@@ -17,6 +17,9 @@ const transporter = nodemailer.createTransport({
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASSWORD,
     },
+    tls: {
+        rejectUnauthorized: false, // Allow self-signed certificates
+    },
 });
 
 // Define the sendVerificationEmail function

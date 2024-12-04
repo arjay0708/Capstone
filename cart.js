@@ -204,7 +204,7 @@ router.post('/create-order', authMiddleware, async (req, res) => {
     }
 });
 
-router.delete('remove-from-cart/:cart_item_id', authMiddleware, async (req, res) => {
+router.delete('/remove/:cart_item_id', authMiddleware, async (req, res) => {
     const { cart_item_id } = req.params;
     const account_id = req.user.account_id;
 
