@@ -4,6 +4,7 @@ const multer = require('multer');
 const path = require('path');
 const cors = require('cors');
 const cron = require('node-cron');
+const moment = require('moment');
 const fs = require('fs');
 const qr = require('qr-image');
 const { authMiddleware, roleCheckMiddleware } = require('./authMiddleware');
@@ -104,68 +105,33 @@ router.post('/', upload.array('images'), async (req, res) => {
     }
 });
 
+
 // PUT update product price and its variants' quantity
-router.put('/update/:id', (req, res) => {
+router.put('/update/:id', async (req, res) => {
     const productId = req.params.id;
     const { price, variants } = req.body;
 
-    pool.getConnection((err, connection) => {
-        if (err) return res.status(500).json({ error: 'Error connecting to the database' });
+    try {
+        const connection = await pool.getConnection();
+        await connection.beginTransaction();
 
-        connection.beginTransaction((transactionErr) => {
-            if (transactionErr) {
-                connection.release();
-                return res.status(500).json({ error: 'Error starting database transaction' });
-            }
+        // Update product price
+        await connection.query('UPDATE Product SET price = ? WHERE product_id = ?', [price, productId]);
 
-            // Update product price
-            connection.query('UPDATE Product SET price = ? WHERE product_id = ?', [price, productId], (productErr) => {
-                if (productErr) {
-                    connection.rollback(() => {
-                        connection.release();
-                        return res.status(500).json({ error: 'Error updating product price' });
-                    });
-                }
+        // Update product variants' quantities
+        for (const variant of variants) {
+            await connection.query('UPDATE ProductVariant SET quantity = ? WHERE product_id = ? AND size = ?', 
+                [variant.quantity, productId, variant.size]);
+        }
 
-                // Update product variants' quantities
-                const variantQueries = variants.map(variant => (
-                    new Promise((resolve, reject) => {
-                        connection.query(
-                            'UPDATE ProductVariant SET quantity = ? WHERE product_id = ? AND size = ?',
-                            [variant.quantity, productId, variant.size],
-                            (err) => {
-                                if (err) reject(err);
-                                else resolve();
-                            }
-                        );
-                    })
-                ));
-
-                Promise.all(variantQueries)
-                    .then(() => {
-                        connection.commit((commitErr) => {
-                            if (commitErr) {
-                                connection.rollback(() => {
-                                    connection.release();
-                                    return res.status(500).json({ error: 'Error committing transaction' });
-                                });
-                            }
-
-                            connection.release();
-                            res.status(200).json({ message: 'Product price and variants updated successfully' });
-                        });
-                    })
-                    .catch((variantErr) => {
-                        connection.rollback(() => {
-                            connection.release();
-                            res.status(500).json({ error: 'Error updating product variants' });
-                        });
-                    });
-            });
-        });
-    });
+        await connection.commit();
+        connection.release();
+        res.status(200).json({ message: 'Product price and variants updated successfully' });
+    } catch (err) {
+        if (connection) connection.rollback(() => connection.release());
+        res.status(500).json({ error: 'Error updating product' });
+    }
 });
-
 
 
 router.get('/latest', async (req, res) => {
@@ -201,51 +167,28 @@ router.get('/latest', async (req, res) => {
 
 
 // DELETE a product and its variants
-router.delete('/:id', (req, res) => {
+router.delete('/delete/:id', async (req, res) => {
     const productId = req.params.id;
 
-    pool.getConnection((err, connection) => {
-        if (err) return res.status(500).json({ error: 'Error connecting to the database' });
-
-        connection.beginTransaction((transactionErr) => {
-            if (transactionErr) {
-                connection.release();
-                return res.status(500).json({ error: 'Error starting database transaction' });
-            }
-
-            connection.query('DELETE FROM ProductVariant WHERE product_id = ?', [productId], (deleteVariantsErr) => {
-                if (deleteVariantsErr) {
-                    connection.rollback(() => {
-                        connection.release();
-                        return res.status(500).json({ error: 'Error deleting product variants' });
-                    });
-                }
-
-                connection.query('DELETE FROM Product WHERE product_id = ?', [productId], (deleteProductErr) => {
-                    if (deleteProductErr) {
-                        connection.rollback(() => {
-                            connection.release();
-                            return res.status(500).json({ error: 'Error deleting product' });
-                        });
-                    }
-
-                    connection.commit((commitErr) => {
-                        if (commitErr) {
-                            connection.rollback(() => {
-                                connection.release();
-                                return res.status(500).json({ error: 'Error committing transaction' });
-                            });
-                        }
-
-                        connection.release();
-                        res.status(200).json({ message: 'Product and its variants deleted successfully' });
-                    });
-                });
-            });
-        });
+    const connection = await pool.getConnection().catch(err => {
+        return res.status(500).json({ error: 'DB connection error' });
     });
-});
 
+    try {
+        await connection.beginTransaction();
+
+        await connection.query('DELETE FROM ProductVariant WHERE product_id = ?', [productId]);
+        await connection.query('DELETE FROM Product WHERE product_id = ?', [productId]);
+
+        await connection.commit();
+        res.status(200).json({ message: 'Product and variants deleted' });
+    } catch (err) {
+        await connection.rollback();
+        res.status(500).json({ error: 'Error during deletion' });
+    } finally {
+        connection.release();
+    }
+});
 // GET QR code for a specific product
 router.get('/:id/qr-id', (req, res) => {
     const productId = req.params.id;
@@ -622,8 +565,6 @@ router.get('/orders/all', async (req, res) => {
     }
 });
 
-
-
 router.put('/ship-order/:order_id', authMiddleware, roleCheckMiddleware(['admin', 'employee']), async (req, res) => {
     const { order_id } = req.params;
     const { tracking_number, carrier } = req.body;
@@ -712,10 +653,6 @@ router.put('/deliver-order/:order_id', authMiddleware, async (req, res) => {
     }
 });
 
-
-
-
-
 // Read all orders for the logged-in user
 router.get('/orders', authMiddleware, async (req, res) => {
     const account_id = req.user.account_id;
@@ -728,7 +665,6 @@ router.get('/orders', authMiddleware, async (req, res) => {
         res.status(500).json({ error: 'Error retrieving orders' });
     }
 });
-
 
 router.get('/order/:id', authMiddleware, roleCheckMiddleware(['admin', 'employee']), async (req, res) => {
     const account_id = req.user.account_id;
@@ -881,6 +817,27 @@ router.delete('/order/:id', authMiddleware, async (req, res) => {
     }
 });
 
+
+
+router.get('/sales/sales', async (req, res) => {
+    const todayStart = moment().startOf('day').format('YYYY-MM-DD HH:mm:ss');
+    const weekStart = moment().startOf('week').format('YYYY-MM-DD HH:mm:ss');
+    const monthStart = moment().startOf('month').format('YYYY-MM-DD HH:mm:ss');
+
+    try {
+        const [salesToday] = await pool.query('SELECT SUM(total_amount) AS total FROM orders WHERE delivered_at >= ?', [todayStart]);
+        const [salesWeekly] = await pool.query('SELECT SUM(total_amount) AS total FROM orders WHERE delivered_at >= ?', [weekStart]);
+        const [salesMonthly] = await pool.query('SELECT SUM(total_amount) AS total FROM orders WHERE delivered_at >= ?', [monthStart]);
+
+        res.status(200).json({
+            salesToday: salesToday[0]?.total || 0,
+            salesWeekly: salesWeekly[0]?.total || 0,
+            salesMonthly: salesMonthly[0]?.total || 0
+        });
+    } catch (err) {
+        res.status(500).json({ error: 'Error retrieving sales data' });
+    }
+});
 
 
 
