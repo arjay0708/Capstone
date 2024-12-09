@@ -104,11 +104,10 @@ router.post('/', upload.array('images'), async (req, res) => {
     }
 });
 
-// PUT update product and its variants
-router.put('/:id', upload.array('images'), (req, res) => {
+// PUT update product price and its variants' quantity
+router.put('/update/:id', (req, res) => {
     const productId = req.params.id;
-    const { Pname, price, sizes, size_type, size_value, variants } = req.body;
-    const images = req.files ? req.files.map(file => file.filename) : [];
+    const { price, variants } = req.body;
 
     pool.getConnection((err, connection) => {
         if (err) return res.status(500).json({ error: 'Error connecting to the database' });
@@ -119,61 +118,54 @@ router.put('/:id', upload.array('images'), (req, res) => {
                 return res.status(500).json({ error: 'Error starting database transaction' });
             }
 
-            const imagesJson = JSON.stringify(images);
-            connection.query('UPDATE Product SET Pname = ?, price = ?, sizes = ?, images = ?, size_type = ?, size_value = ? WHERE product_id = ?',
-                [Pname, price, sizes, imagesJson, size_type, size_value, productId],
-                (productErr) => {
-                    if (productErr) {
-                        connection.rollback(() => {
-                            connection.release();
-                            return res.status(500).json({ error: 'Error updating product' });
-                        });
-                    }
+            // Update product price
+            connection.query('UPDATE Product SET price = ? WHERE product_id = ?', [price, productId], (productErr) => {
+                if (productErr) {
+                    connection.rollback(() => {
+                        connection.release();
+                        return res.status(500).json({ error: 'Error updating product price' });
+                    });
+                }
 
-                    connection.query('DELETE FROM ProductVariant WHERE product_id = ?', [productId], (deleteErr) => {
-                        if (deleteErr) {
-                            connection.rollback(() => {
-                                connection.release();
-                                return res.status(500).json({ error: 'Error deleting existing variants' });
-                            });
-                        }
+                // Update product variants' quantities
+                const variantQueries = variants.map(variant => (
+                    new Promise((resolve, reject) => {
+                        connection.query(
+                            'UPDATE ProductVariant SET quantity = ? WHERE product_id = ? AND size = ?',
+                            [variant.quantity, productId, variant.size],
+                            (err) => {
+                                if (err) reject(err);
+                                else resolve();
+                            }
+                        );
+                    })
+                ));
 
-                        const variantQueries = variants.map(variant => (
-                            new Promise((resolve, reject) => {
-                                connection.query('INSERT INTO ProductVariant (product_id, gender, size, quantity) VALUES (?, ?, ?, ?)',
-                                    [productId, variant.gender, variant.size, variant.quantity],
-                                    (err) => {
-                                        if (err) reject(err);
-                                        else resolve();
-                                    });
-                            })
-                        ));
-
-                        Promise.all(variantQueries)
-                            .then(() => {
-                                connection.commit((commitErr) => {
-                                    if (commitErr) {
-                                        connection.rollback(() => {
-                                            connection.release();
-                                            return res.status(500).json({ error: 'Error committing transaction' });
-                                        });
-                                    }
-
-                                    connection.release();
-                                    res.status(200).json({ message: 'Product updated successfully' });
-                                });
-                            })
-                            .catch((variantErr) => {
+                Promise.all(variantQueries)
+                    .then(() => {
+                        connection.commit((commitErr) => {
+                            if (commitErr) {
                                 connection.rollback(() => {
                                     connection.release();
-                                    res.status(500).json({ error: 'Error updating product variants' });
+                                    return res.status(500).json({ error: 'Error committing transaction' });
                                 });
-                            });
+                            }
+
+                            connection.release();
+                            res.status(200).json({ message: 'Product price and variants updated successfully' });
+                        });
+                    })
+                    .catch((variantErr) => {
+                        connection.rollback(() => {
+                            connection.release();
+                            res.status(500).json({ error: 'Error updating product variants' });
+                        });
                     });
-                });
+            });
         });
     });
 });
+
 
 
 router.get('/latest', async (req, res) => {
@@ -565,16 +557,17 @@ router.get('/:id', async (req, res) => {
 
 router.get('/orders/all', async (req, res) => {
     try {
-        // Fetch all orders and join with user details
+        // Fetch all orders and join with user details, including order status
         const [orders] = await pool.query(`
             SELECT 
                 Orders.*,
-                 CONCAT(accounts.fname, ' ', accounts.lname) AS name,
+                Orders.order_status,  -- Add the order_status column
+                CONCAT(accounts.fname, ' ', accounts.lname) AS name,
                 accounts.email AS email,
                 accounts.phone AS phone,
                 accounts.address AS address
             FROM Orders
-            JOIN accounts ON Orders.account_id = accounts.account_id  -- Assuming 'account_id' links to 'user_id' in 'Users' table
+            JOIN accounts ON Orders.account_id = accounts.account_id
             ORDER BY Orders.created_at DESC
         `);
 
@@ -596,6 +589,7 @@ router.get('/orders/all', async (req, res) => {
                 OrderItem.quantity,
                 OrderItem.price_at_purchase,
                 Product.Pname,
+                ProductVariant.size,
                 Product.images
              FROM OrderItem
              JOIN ProductVariant ON OrderItem.product_variant_id = ProductVariant.variant_id
@@ -616,9 +610,8 @@ router.get('/orders/all', async (req, res) => {
                 .filter(item => item.order_id === order.order_id)
                 .map(item => ({
                     ...item,
-                    // Parse JSON images and generate paths for each image
-                    images: JSON.parse(item.images).map(image => `/uploads/${image}`), // assuming images are stored under /uploads/
-                    price_at_purchase: parseFloat(item.price_at_purchase) // Ensure it's a number
+                    images: JSON.parse(item.images).map(image => `/uploads/${image}`),
+                    price_at_purchase: parseFloat(item.price_at_purchase)
                 }))
         }));
 
@@ -766,9 +759,9 @@ router.get('/order/:id', authMiddleware, roleCheckMiddleware(['admin', 'employee
                     OrderItem.order_item_id,
                     OrderItem.product_variant_id,
                     OrderItem.quantity,
-                    OrderItem.size
                     OrderItem.price_at_purchase,
                     Product.Pname,
+                    ProductVariant.size,
                     Product.images
                 FROM OrderItem
                 JOIN ProductVariant ON OrderItem.product_variant_id = ProductVariant.variant_id
@@ -814,6 +807,7 @@ router.get('/order/:id', authMiddleware, roleCheckMiddleware(['admin', 'employee
                     OrderItem.quantity,
                     OrderItem.price_at_purchase,
                     Product.Pname,
+                    ProductVariant.size,
                     Product.images
                 FROM OrderItem
                 JOIN ProductVariant ON OrderItem.product_variant_id = ProductVariant.variant_id
