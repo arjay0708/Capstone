@@ -3,6 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const cors = require('cors');
+const cron = require('node-cron');
 const fs = require('fs');
 const qr = require('qr-image');
 const { authMiddleware, roleCheckMiddleware } = require('./authMiddleware');
@@ -634,29 +635,39 @@ router.put('/ship-order/:order_id', authMiddleware, roleCheckMiddleware(['admin'
     const { order_id } = req.params;
     const { tracking_number, carrier } = req.body;
 
-    // Validate inputs
     if (!tracking_number || !carrier) {
         return res.status(400).json({ message: 'Tracking number and carrier are required.' });
     }
 
     try {
-        // Check if the order exists
         const [order] = await pool.query('SELECT * FROM Orders WHERE order_id = ?', [order_id]);
 
         if (order.length === 0) {
             return res.status(404).json({ message: 'Order not found.' });
         }
 
-        // Check if the order is already shipped or delivered
-        if (order[0].order_status === 'Shipped' || order[0].order_status === 'Delivered') {
+        if (['Shipped', 'Delivered'].includes(order[0].order_status)) {
             return res.status(400).json({ message: `Order is already ${order[0].order_status.toLowerCase()}.` });
         }
 
-        // Update the order status, tracking number, carrier, and set shipped_at timestamp
+        // Update status to "Shipped"
         await pool.query(
             'UPDATE Orders SET order_status = ?, tracking_number = ?, carrier = ?, shipped_at = NOW() WHERE order_id = ?',
             ['Shipped', tracking_number, carrier, order_id]
         );
+
+        // Schedule auto-update to "Delivered"
+        setTimeout(async () => {
+            try {
+                await pool.query(
+                    'UPDATE Orders SET order_status = ?, delivered_at = NOW() WHERE order_id = ? AND order_status = ?',
+                    ['Delivered', order_id, 'Shipped']
+                );
+                console.log(`Order ${order_id} auto-updated to Delivered.`);
+            } catch (error) {
+                console.error(`Error auto-updating order ${order_id} to Delivered:`, error);
+            }
+        }, 10 * 24 * 60 * 60 * 1000); // 10 days in milliseconds
 
         res.status(200).json({ message: 'Order status updated to Shipped with tracking information.' });
     } catch (error) {
@@ -664,6 +675,7 @@ router.put('/ship-order/:order_id', authMiddleware, roleCheckMiddleware(['admin'
         res.status(500).json({ error: 'Error updating order status.' });
     }
 });
+
 router.put('/deliver-order/:order_id', authMiddleware, async (req, res) => {
     const { order_id } = req.params;
 
@@ -860,7 +872,19 @@ router.delete('/order/:id', authMiddleware, async (req, res) => {
     }
 });
 
-
+cron.schedule('0 0 * * *', async () => { // Runs daily at midnight
+    try {
+        await pool.query(
+            `UPDATE Orders 
+             SET order_status = 'Delivered', delivered_at = NOW() 
+             WHERE order_status = 'Shipped' 
+               AND shipped_at <= NOW() - INTERVAL 10 DAY`
+        );
+        console.log('Auto-updated shipped orders to Delivered.');
+    } catch (error) {
+        console.error('Error in auto-update cron job:', error);
+    }
+});
 
 
 module.exports = router;
