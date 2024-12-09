@@ -492,7 +492,6 @@ router.get('/categories', async (req, res) => {
     }
 });
 
-
 // Route to get product by ID
 router.get('/:id', async (req, res) => {
     const productId = req.params.id;
@@ -562,6 +561,7 @@ router.get('/:id', async (req, res) => {
     }
 });
 
+
 router.get('/orders/all', async (req, res) => {
     try {
         // Fetch all orders and join with user details
@@ -630,7 +630,7 @@ router.get('/orders/all', async (req, res) => {
 
 
 
- router.put('/ship-order/:order_id', authMiddleware, roleCheckMiddleware(['admin', 'employee']), async (req, res) => {
+router.put('/ship-order/:order_id', authMiddleware, roleCheckMiddleware(['admin', 'employee']), async (req, res) => {
     const { order_id } = req.params;
     const { tracking_number, carrier } = req.body;
 
@@ -652,9 +652,9 @@ router.get('/orders/all', async (req, res) => {
             return res.status(400).json({ message: `Order is already ${order[0].order_status.toLowerCase()}.` });
         }
 
-        // Update the order status, tracking number, and carrier
+        // Update the order status, tracking number, carrier, and set shipped_at timestamp
         await pool.query(
-            'UPDATE Orders SET order_status = ?, tracking_number = ?, carrier = ? WHERE order_id = ?',
+            'UPDATE Orders SET order_status = ?, tracking_number = ?, carrier = ?, shipped_at = NOW() WHERE order_id = ?',
             ['Shipped', tracking_number, carrier, order_id]
         );
 
@@ -664,6 +664,7 @@ router.get('/orders/all', async (req, res) => {
         res.status(500).json({ error: 'Error updating order status.' });
     }
 });
+
 
 
 

@@ -192,4 +192,64 @@ router.get('/buyer-details', authMiddleware, async (req, res) => {
     }
 });
 
+router.get('/user-orders/:accountId', authMiddleware, async (req, res) => {
+    const accountId = req.params.accountId;
+
+    try {
+        // Retrieve orders for the specific user
+        const [orders] = await pool.query(`
+            SELECT 
+                Orders.*,
+                Orders.order_status,
+                CONCAT(accounts.fname, ' ', accounts.lname) AS name,
+                accounts.email,
+                accounts.phone,
+                accounts.address
+            FROM Orders
+            JOIN accounts ON Orders.account_id = accounts.account_id
+            WHERE Orders.account_id = ?
+        `, [accountId]);
+
+        if (orders.length === 0) {
+            return res.status(404).json({ message: 'No orders found for this user.' });
+        }
+
+        // Map through the orders to fetch their items
+        const ordersWithItems = await Promise.all(orders.map(async (order) => {
+            const [orderItems] = await pool.query(`
+                SELECT 
+                    OrderItem.order_item_id,
+                    OrderItem.product_variant_id,
+                    OrderItem.quantity,
+                    OrderItem.price_at_purchase,
+                    Product.Pname,
+                    Product.images
+                FROM OrderItem
+                JOIN ProductVariant ON OrderItem.product_variant_id = ProductVariant.variant_id
+                JOIN Product ON ProductVariant.product_id = Product.product_id
+                WHERE OrderItem.order_id = ?
+            `, [order.order_id]);
+
+            const itemsWithImages = orderItems.map(item => ({
+                ...item,
+                images: JSON.parse(item.images).map(image => `/uploads/${image}`),
+                price_at_purchase: parseFloat(item.price_at_purchase)
+            }));
+
+            return {
+                ...order,
+                items: itemsWithImages
+            };
+        }));
+
+        return res.status(200).json({ orders: ordersWithItems });
+    } catch (error) {
+        console.error('Error fetching user orders:', error);
+        res.status(500).json({ error: 'An error occurred while retrieving user orders.' });
+    }
+});
+
+
+
+
 module.exports = router;
