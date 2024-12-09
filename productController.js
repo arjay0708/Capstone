@@ -664,6 +664,35 @@ router.put('/ship-order/:order_id', authMiddleware, roleCheckMiddleware(['admin'
         res.status(500).json({ error: 'Error updating order status.' });
     }
 });
+router.put('/deliver-order/:order_id', authMiddleware, async (req, res) => {
+    const { order_id } = req.params;
+
+    try {
+        // Check if the order exists
+        const [order] = await pool.query('SELECT * FROM Orders WHERE order_id = ?', [order_id]);
+
+        if (order.length === 0) {
+            return res.status(404).json({ message: 'Order not found.' });
+        }
+
+        // Check if the order is already delivered
+        if (order[0].order_status === 'Delivered') {
+            return res.status(400).json({ message: 'Order is already delivered.' });
+        }
+
+        // Update the order status to Delivered and set delivered_at timestamp
+        await pool.query(
+            'UPDATE Orders SET order_status = ?, delivered_at = NOW() WHERE order_id = ?',
+            ['Delivered', order_id]
+        );
+
+        res.status(200).json({ message: 'Order status updated to Delivered.' });
+    } catch (error) {
+        console.error('Error updating order status:', error);
+        res.status(500).json({ error: 'Error updating order status.' });
+    }
+});
+
 
 
 
