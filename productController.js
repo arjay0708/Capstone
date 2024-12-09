@@ -676,6 +676,20 @@ router.put('/ship-order/:order_id', authMiddleware, roleCheckMiddleware(['admin'
     }
 });
 
+cron.schedule('0 0 * * *', async () => { // Runs daily at midnight
+    try {
+        await pool.query(
+            `UPDATE Orders 
+             SET order_status = 'Delivered', delivered_at = NOW() 
+             WHERE order_status = 'Shipped' 
+               AND shipped_at <= NOW() - INTERVAL 10 DAY`
+        );
+        console.log('Auto-updated shipped orders to Delivered.');
+    } catch (error) {
+        console.error('Error in auto-update cron job:', error);
+    }
+});
+
 router.put('/deliver-order/:order_id', authMiddleware, async (req, res) => {
     const { order_id } = req.params;
 
@@ -752,6 +766,7 @@ router.get('/order/:id', authMiddleware, roleCheckMiddleware(['admin', 'employee
                     OrderItem.order_item_id,
                     OrderItem.product_variant_id,
                     OrderItem.quantity,
+                    OrderItem.size
                     OrderItem.price_at_purchase,
                     Product.Pname,
                     Product.images
@@ -872,19 +887,7 @@ router.delete('/order/:id', authMiddleware, async (req, res) => {
     }
 });
 
-cron.schedule('0 0 * * *', async () => { // Runs daily at midnight
-    try {
-        await pool.query(
-            `UPDATE Orders 
-             SET order_status = 'Delivered', delivered_at = NOW() 
-             WHERE order_status = 'Shipped' 
-               AND shipped_at <= NOW() - INTERVAL 10 DAY`
-        );
-        console.log('Auto-updated shipped orders to Delivered.');
-    } catch (error) {
-        console.error('Error in auto-update cron job:', error);
-    }
-});
+
 
 
 module.exports = router;
