@@ -11,10 +11,6 @@ const customerRouter = require('./customerController.js');
 const cartRouter = require('./cart.js');
 const path = require('path');
 
-// Set up MySQL connection pool
-const pool = mysql.createPool({
-  uri: process.env.MYSQL_URL,  // Use the environment variable for MySQL connection URL
-});
 
 // Use CORS for cross-origin requests
 app.use(cors({
@@ -35,7 +31,7 @@ app.use('/customer', customerRouter);
 app.use('/cart', cartRouter);
 
 
-// Serve static files from the uploads directory
+// testing
 app.get('/', async (req, res) => {
     const query = `
         SELECT 
