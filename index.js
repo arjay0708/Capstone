@@ -12,7 +12,7 @@ const cartRouter = require ('./cart.js');
 const path = require('path');
 
 app.use(cors({
-    origin: 'http://localhost:4200', // Adjust to match your Angular frontend URL
+    origin: 'https://gaposource.com', // Adjust to match your Angular frontend URL
   }));
 
   app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
