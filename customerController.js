@@ -85,6 +85,7 @@ router.post('/register', async (req, res) => {
     }
 });
 
+
 // Email verification endpoint
 router.get('/verify-email/:token', async (req, res) => {
     const { token } = req.params;
@@ -246,6 +247,81 @@ router.get('/user-orders/:accountId', authMiddleware, async (req, res) => {
     } catch (error) {
         console.error('Error fetching user orders:', error);
         res.status(500).json({ error: 'An error occurred while retrieving user orders.' });
+    }
+});
+
+router.put('/edit-profile', authMiddleware, async (req, res) => {
+    const { username, email, phone, oldPassword, newPassword } = req.body;
+    const accountId = req.user.account_id; // Retrieved from authMiddleware
+
+    try {
+        // Fetch the current user
+        const [userResult] = await pool.query('SELECT * FROM Accounts WHERE account_id = ?', [accountId]);
+        if (userResult.length === 0) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+        const user = userResult[0];
+
+        const updateFields = [];
+        const params = [];
+
+        // Update username (only if it's provided and has not been updated before)
+        if (username) {
+            if (user.username_updated) {
+                return res.status(400).json({ message: 'Username can only be updated once.' });
+            }
+            updateFields.push('username = ?');
+            params.push(username);
+        }
+
+        // Update email
+        if (email) {
+            updateFields.push('email = ?');
+            params.push(email);
+        }
+
+        // Update phone number
+        if (phone) {
+            if (!/^[0-9]{11}$/.test(phone)) {
+                return res.status(400).json({ message: 'Phone number must be 11 digits.' });
+            }
+            updateFields.push('phone = ?');
+            params.push(phone);
+        }
+
+        // Update password
+        if (oldPassword && newPassword) {
+            const isMatch = await bcrypt.compare(oldPassword, user.password);
+            if (!isMatch) {
+                return res.status(401).json({ message: 'Old password is incorrect.' });
+            }
+            if (newPassword.length < 8) {
+                return res.status(400).json({ message: 'New password must be at least 8 characters long.' });
+            }
+            const hashedPassword = await bcrypt.hash(newPassword, 12);
+            updateFields.push('password = ?');
+            params.push(hashedPassword);
+        }
+
+        if (updateFields.length === 0) {
+            return res.status(400).json({ message: 'No updates provided.' });
+        }
+
+        // Append the accountId for the WHERE clause
+        params.push(accountId);
+
+        // Perform the update query
+        const updateQuery = `UPDATE Accounts SET ${updateFields.join(', ')} WHERE account_id = ?`;
+        const [result] = await pool.query(updateQuery, params);
+
+        if (result.affectedRows > 0) {
+            return res.status(200).json({ message: 'Profile updated successfully.' });
+        } else {
+            return res.status(500).json({ message: 'Failed to update profile.' });
+        }
+    } catch (error) {
+        console.error('Error updating profile:', error);
+        res.status(500).json({ message: 'Internal server error.' });
     }
 });
 

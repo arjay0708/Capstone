@@ -610,19 +610,6 @@ router.put('/ship-order/:order_id', authMiddleware, roleCheckMiddleware(['admin'
     }
 });
 
-cron.schedule('0 0 * * *', async () => { // Runs daily at midnight
-    try {
-        await pool.query(
-            `UPDATE Orders 
-             SET order_status = 'Delivered', delivered_at = NOW() 
-             WHERE order_status = 'Shipped' 
-               AND shipped_at <= NOW() - INTERVAL 10 DAY`
-        );
-        console.log('Auto-updated shipped orders to Delivered.');
-    } catch (error) {
-        console.error('Error in auto-update cron job:', error);
-    }
-});
 
 router.put('/deliver-order/:order_id', authMiddleware, async (req, res) => {
     const { order_id } = req.params;
@@ -793,27 +780,39 @@ router.put('/order/:id/status', authMiddleware, async (req, res) => {
 });
 
 // Delete an order (cancel the order)
-router.delete('/order/:id', authMiddleware, async (req, res) => {
-    const account_id = req.user.account_id;
-    const order_id = req.params.id;
+router.put('/cancel/:id/status', authMiddleware, async (req, res) => {
+    const order_id = req.params.id; // Extract order ID from the request parameters
+    const { status } = req.body;   // Expect status in the request body
 
     try {
-        const [order] = await pool.query(
-            'SELECT * FROM Orders WHERE order_id = ? AND account_id = ? AND order_status = "Pending"',
-            [order_id, account_id]
-        );
+        // Check the current status of the order
+        const [order] = await pool.query('SELECT order_status FROM Orders WHERE order_id = ?', [order_id]);
 
         if (order.length === 0) {
-            return res.status(400).json({ message: 'Order not found or cannot be cancelled' });
+            return res.status(404).json({ message: 'Order not found' });
         }
 
-        await pool.query('DELETE FROM Orders WHERE order_id = ?', [order_id]);
-        await pool.query('DELETE FROM OrderItem WHERE order_id = ?', [order_id]);
+        const currentStatus = order[0].order_status;
 
-        res.status(200).json({ message: 'Order cancelled successfully' });
+        // Only allow cancellation if the status is 'Pending'
+        if (currentStatus !== 'Pending') {
+            return res.status(400).json({ message: 'Order can only be cancelled if it is in "Pending" status.' });
+        }
+
+        // Update the order status to 'Cancelled'
+        const [result] = await pool.query(
+            'UPDATE Orders SET order_status = ? WHERE order_id = ?',
+            ['Cancelled', order_id]
+        );
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ message: 'Order not found or already cancelled' });
+        }
+
+        res.status(200).json({ message: 'Order successfully cancelled' });
     } catch (error) {
-        console.error('Error cancelling order:', error);
-        res.status(500).json({ error: 'Error cancelling order' });
+        console.error('Error updating order status:', error);
+        res.status(500).json({ error: 'An error occurred while cancelling the order' });
     }
 });
 
