@@ -1,6 +1,4 @@
 const mysql = require('mysql2');
-const nodemailer = require('nodemailer');
-const { google } = require('googleapis'); // Import googleapis for OAuth2.0
 require('dotenv').config();
 
 
