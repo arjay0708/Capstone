@@ -6,7 +6,6 @@ const QRCode = require('qrcode');
 const qr = require('qr-image');
 const path = require('path');
 const fs = require('fs');
-const qrCodeDir = 'D:/Capstone/qr-codes';
 // Retrieve all QR codes
 router.get('/', (req, res) => {
     pool.query('SELECT * FROM QRCode', (err, results) => {
@@ -51,7 +50,6 @@ router.delete('/:id', (req, res) => {
 });
 router.get('/qr-codes/:id', (req, res) => {
     const { id } = req.params;
-    const qrCodePath = path.join('D:/Capstone/qr-codes', `product_${id}.png`);
     // Check if the QR code file exists
     if (fs.existsSync(qrCodePath)) {
         res.setHeader('Content-Disposition', `attachment; filename=product_${id}.png`);

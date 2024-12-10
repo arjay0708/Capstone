@@ -23,6 +23,7 @@ const pool = require('./connection'); // Adjust the path to your database connec
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
         cb(null, 'D:/Capstone/uploads'); // Ensure this path is correct and exists
+        cb(null, 'C:/Capstone/uploads'); // Ensure this path is correct and exists
     },
     filename: function (req, file, cb) {
         cb(null, Date.now() + path.extname(file.originalname));
@@ -60,7 +61,6 @@ router.post('/', upload.array('images'), (req, res) => __awaiter(void 0, void 0,
         // Validate and insert variants
         const variantQueries = parsedVariants.map(variant => connection.query('INSERT INTO ProductVariant (product_id, gender, size, quantity) VALUES (?, ?, ?, ?)', [productID, variant.gender, variant.size, variant.quantity]));
         // Ensure QR code directory exists
-        const qrCodeDir = 'D:/Capstone/Capstone/qr-codes';
         if (!fs.existsSync(qrCodeDir)) {
             fs.mkdirSync(qrCodeDir, { recursive: true });
         }
