@@ -36,10 +36,6 @@ app.use('/cart', cartRouter);
 
 
 // Serve static files from the uploads directory
-app.get('/', (req, res) => {
-    res.send('Static file serving setup is working');
-});
-
 app.get('/products', async (req, res) => {
     const query = `
         SELECT 
