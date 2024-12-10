@@ -34,21 +34,72 @@ app.use('/counts', countsRouter);
 app.use('/customer', customerRouter);
 app.use('/cart', cartRouter);
 
-// Test database connection route
-app.get('/test-db-connection', (req, res) => {
-    pool.getConnection((err, connection) => {
-        if (err) {
-            console.error('Database connection failed:', err);
-            return res.status(500).send('Database connection failed');
-        }
-        connection.release();  // Release the connection back to the pool
-        res.send('Database connection successful');
-    });
-});
 
 // Serve static files from the uploads directory
 app.get('/', (req, res) => {
     res.send('Static file serving setup is working');
+});
+
+app.get('/products', async (req, res) => {
+    const query = `
+        SELECT 
+            p.product_id, 
+            p.Pname, 
+            p.price AS productPrice, 
+            p.images, 
+            p.category,
+            p.created_at,
+            p.description, 
+            pv.gender, 
+            pv.size, 
+            pv.quantity
+        FROM 
+            Product p
+        LEFT JOIN 
+            ProductVariant pv ON p.product_id = pv.product_id
+        ORDER BY 
+            p.created_at DESC
+    `;
+
+    try {
+        const connection = await pool.getConnection();
+        const [results] = await connection.query(query);
+        connection.release();
+
+        // Organize products with their variants
+        const products = results.reduce((acc, row) => {
+            if (!acc[row.product_id]) {
+                acc[row.product_id] = {
+                    id: row.product_id,
+                    Pname: row.Pname,
+                    category: row.category,
+                    description: row.description,
+                    price: row.productPrice,
+                    date: row.created_at,
+                    images: JSON.parse(row.images).map(image => `/uploads/${path.basename(image)}`),
+                    variants: []
+                };
+            }
+
+            if (row.gender) {
+                acc[row.product_id].variants.push({
+                    gender: row.gender,
+                    size: row.size,
+                    quantity: row.quantity
+                });
+            }
+
+            return acc;
+        }, {});
+
+        // Convert the object to an array and sort by date in descending order
+        const sortedProducts = Object.values(products).sort((a, b) => new Date(b.date) - new Date(a.date));
+
+        res.json(sortedProducts);
+    } catch (error) {
+        console.error('Error executing query:', error);
+        res.status(500).json({ error: 'Error retrieving products' });
+    }
 });
 
 app.listen(port, () => {
