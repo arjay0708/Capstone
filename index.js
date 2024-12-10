@@ -36,7 +36,7 @@ app.use('/cart', cartRouter);
 
 
 // Serve static files from the uploads directory
-app.get('/products', async (req, res) => {
+app.get('/', async (req, res) => {
     const query = `
         SELECT 
             p.product_id, 
