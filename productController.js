@@ -14,7 +14,7 @@ const pool = require('./connection'); // Adjust the path to your database connec
 // Set up storage for Multer
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
-        cb(null, 'D:/Capstone/uploads'); // Ensure this path is correct and exists
+        cb(null, 'C:/Capstone/uploads'); // Ensure this path is correct and exists
     },
     filename: function (req, file, cb) {
         cb(null, Date.now() + path.extname(file.originalname));
@@ -72,7 +72,7 @@ router.post('/', upload.array('images'), async (req, res) => {
         );
 
         // Ensure QR code directory exists
-        const qrCodeDir = 'D:/Capstone/Capstone/qr-codes';
+        const qrCodeDir = 'C:/Capstone/qr-codes';
         if (!fs.existsSync(qrCodeDir)) {
             fs.mkdirSync(qrCodeDir, { recursive: true });
         }
