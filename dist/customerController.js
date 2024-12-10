@@ -11,7 +11,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const pool = require('./connection'); // Ensure this points to your database connection
 const { authMiddleware, roleCheckMiddleware } = require('./authMiddleware'); // Adjust the path if necessary
 require('dotenv').config(); // Ensure you have dotenv installed
