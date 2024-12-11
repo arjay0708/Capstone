@@ -15,10 +15,9 @@ const pool = require('./connection.js');
 
 // Use CORS for cross-origin requests
 app.use(cors({
-    origin: 'https://gaposource.com', // Adjust to match your Angular frontend URL
+    origin: 'http://localhost:4200', // Adjust to match your Angular frontend URL
 }));
 
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 const port = 8080;
 app.use(bodyParser.json());

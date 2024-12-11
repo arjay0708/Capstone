@@ -116,9 +116,13 @@ router.get('/view', authMiddleware, async (req, res) => {
             return res.status(200).json({ message: 'Your cart is empty', items: [] });
         }
 
-        // Parse images and update them to include full URL
+        // Parse images and update them to include full Cloudinary URL
         const updatedItems = items.map(item => {
-            const images = JSON.parse(item.images).map(image => `/uploads/${image}`);
+            // Assuming 'images' is a JSON array stored in the 'Product' table
+            const images = JSON.parse(item.images).map(image => {
+                // Construct the Cloudinary URL
+                return `https://res.cloudinary.com/duqbdikz0/image/upload/v1733890541/${image}`;
+            });
             return { ...item, images };
         });
 

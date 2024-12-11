@@ -77,8 +77,12 @@ CREATE TABLE Orders (
     order_id INT PRIMARY KEY AUTO_INCREMENT,
     account_id INT,
     total_amount DECIMAL(10, 2),
-    order_status ENUM('Pending', 'Shipped', 'Delivered', 'Cancelled') DEFAULT 'Pending',
+    order_status ENUM('Pending', 'Preparing','Shipped', 'Delivered', 'Cancelled') DEFAULT 'Pending',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    delivered_at DATETIME NULL,
+    shipped_at DATETIME NULL,ADD 
+    tracking_number VARCHAR(50),
+     carrier VARCHAR(50),
     FOREIGN KEY (account_id) REFERENCES Accounts(account_id) ON DELETE CASCADE
 );
 

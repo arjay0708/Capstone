@@ -39,7 +39,7 @@ router.get('/metrics', async (req, res) => {
                 MONTH(view_date) AS month, 
                 COUNT(*) AS view_count
             FROM 
-                ShopViews
+                Shopviews
             WHERE
                 view_date BETWEEN DATE_SUB(NOW(), INTERVAL 1 YEAR) AND NOW()
             GROUP BY 

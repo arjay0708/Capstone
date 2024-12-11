@@ -1,30 +1,41 @@
 const express = require('express');
+require('dotenv').config();
 const router = express.Router();
 const multer = require('multer');
+const { v2: cloudinary } = require('cloudinary');
+const { CloudinaryStorage } = require('multer-storage-cloudinary'); // Use this method to create storage
 const path = require('path');
 const cors = require('cors');
-const cron = require('node-cron');
-const moment = require('moment');
 const fs = require('fs');
 const qr = require('qr-image');
+const fetch = import('node-fetch');
+const moment = require('moment');
+const streamifier = require('streamifier');
 const { authMiddleware, roleCheckMiddleware } = require('./authMiddleware');
 const pool = require('./connection'); // Adjust the path to your database connection file
 
-
-// Set up storage for Multer
-const storage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        cb(null, 'uploads/'); // Ensure this path is correct and exists
-    },
-    filename: function (req, file, cb) {
-        cb(null, Date.now() + path.extname(file.originalname));
+// Configure Cloudinary with your credentials from the .env file
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET,
+  });
+  
+  // Set up Cloudinary storage for Multer
+  const storage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+      folder: 'products', // Optionally specify a folder on Cloudinary
+      allowed_formats: ['jpg', 'jpeg', 'png', 'gif'], // Restrict file formats
+      transformation: [{ width: 500, height: 500, crop: 'limit' }] // Resize to 500x500 if needed
     }
-});
+  });
+  
+  const upload = multer({ storage });
 
-const upload = multer({ storage: storage });
-
+  // POST route to create a product
 // POST route to create a product
-router.post('/', upload.array('images'), async (req, res) => {
+    router.post('/', upload.array('images'), async (req, res) => {
     const { Pname, price, category, description, variants } = req.body;
 
     // Log received files and data for debugging
@@ -38,7 +49,7 @@ router.post('/', upload.array('images'), async (req, res) => {
 
     const images = req.files.map(file => file.filename); // Get the uploaded filenames
 
-    // Ensure `variants` is an array
+    // Ensure variants is an array
     let parsedVariants = [];
     try {
         parsedVariants = Array.isArray(variants) ? variants : JSON.parse(variants);
@@ -56,6 +67,7 @@ router.post('/', upload.array('images'), async (req, res) => {
         // Convert images array to JSON string
         const imagesJson = JSON.stringify(images);
 
+        // Insert the product data into the database
         const [productResult] = await connection.query(
             'INSERT INTO Product (Pname, price, images, category, description) VALUES (?, ?, ?, ?, ?)',
             [Pname, price, imagesJson, category, description]
@@ -71,25 +83,45 @@ router.post('/', upload.array('images'), async (req, res) => {
             )
         );
 
-        // Ensure QR code directory exists
-        const qrCodeDir = 'C:/Capstone/qr-codes';
-        if (!fs.existsSync(qrCodeDir)) {
-            fs.mkdirSync(qrCodeDir, { recursive: true });
-        }
-
+        // Generate QR code URL (if you need to generate QR but not save it locally)
         const qrURL = `https://gaposource.com/viewshop/inside/${productID}`;
         const qrImage = qr.imageSync(qrURL, { type: 'png' });
-        const qrImagePath = path.join(qrCodeDir, `product_${productID}.png`); // Ensure this path exists
 
-        fs.writeFileSync(qrImagePath, qrImage);
+        // Upload the QR code directly to Cloudinary, using product_id as the filename
+        const qrImageUpload = await cloudinary.uploader.upload_stream(
+            {
+                folder: 'qr-codes', // Specify the folder in Cloudinary
+                public_id: `product_${productID}`, // Use product_id as the filename (public_id)
+                resource_type: 'image', // Image resource type
+            },
+            (error, result) => {
+                if (error) {
+                    console.error('Error uploading QR code to Cloudinary:', error);
+                    return res.status(500).send('Error uploading QR code');
+                }
+                const qrCodeUrl = result.secure_url;
 
-        await Promise.all(variantQueries);
-        await connection.commit();
+                // Insert the variants into the database
+                Promise.all(variantQueries)
+                    .then(async () => {
+                        await connection.commit();
 
-        res.status(201).json({
-            message: `Product created with ID: ${productID}`,
-            qr_id: productID
-        });
+                        // Return the response with product creation and QR code URL
+                        res.status(201).json({
+                            message: `Product created with ID: ${productID}`,
+                            qr_code_url: qrCodeUrl,  // Return QR code URL from Cloudinary
+                        });
+                    })
+                    .catch(async (error) => {
+                        console.error('Error inserting variants:', error);
+                        await connection.rollback();
+                        res.status(500).json({ error: 'Error inserting variants' });
+                    });
+            }
+        );
+
+        // Pipe the QR image to Cloudinary
+        qrImageUpload.end(qrImage);
     } catch (error) {
         console.error('Error creating product:', error);
         if (connection) {
@@ -103,69 +135,99 @@ router.post('/', upload.array('images'), async (req, res) => {
     } finally {
         if (connection) connection.release();
     }
-});
-
-
-// PUT update product price and its variants' quantity
-router.put('/update/:id', async (req, res) => {
-    const productId = req.params.id;
-    const { price, variants } = req.body;
-
-    try {
-        const connection = await pool.getConnection();
-        await connection.beginTransaction();
-
-        // Update product price
-        await connection.query('UPDATE Product SET price = ? WHERE product_id = ?', [price, productId]);
-
-        // Update product variants' quantities
-        for (const variant of variants) {
-            await connection.query('UPDATE ProductVariant SET quantity = ? WHERE product_id = ? AND size = ?', 
-                [variant.quantity, productId, variant.size]);
+    });
+  
+    router.get('/image/*', async (req, res) => {
+        const imagePath = req.params[0]; // Get the image path after /image/
+    
+        // Construct the full Cloudinary URL
+        const cloudinaryUrl = `https://res.cloudinary.com/duqbdikz0/image/upload/${imagePath}`;
+    
+        try {
+            // Fetch the image and stream it back to the client
+            const response = await fetch(cloudinaryUrl);
+            if (!response.ok) {
+                return res.status(404).send('Image not found');
+            }
+    
+            // Set the correct content type for image response
+            const contentType = response.headers.get('Content-Type');
+            res.setHeader('Content-Type', contentType);
+    
+            // Pipe the image data to the response
+            response.body.pipe(res);
+        } catch (error) {
+            console.error('Error fetching image from Cloudinary:', error);
+            res.status(500).send('Error fetching image');
         }
-
-        await connection.commit();
-        connection.release();
-        res.status(200).json({ message: 'Product price and variants updated successfully' });
-    } catch (err) {
-        if (connection) connection.rollback(() => connection.release());
-        res.status(500).json({ error: 'Error updating product' });
-    }
-});
-
-
-router.get('/latest', async (req, res) => {
-    try {
-      const query = `
-        SELECT 
-          p.product_id, 
-          p.Pname, 
-          p.price AS productPrice, 
-          p.images, 
-          p.category,
-          p.created_at,
-          p.description 
-        FROM Product p
-        ORDER BY p.created_at DESC
-        LIMIT 4
-      `;
-  
-      const [latestProducts] = await pool.query(query);
-  
-      // Parse image URLs
-      const productsWithImages = latestProducts.map(product => {
-        product.images = JSON.parse(product.images).map(image => `/uploads/${path.basename(image)}`);
-        return product;no
-      });
-  
-      res.status(200).json(productsWithImages);
-    } catch (error) {
-      console.error('Error fetching latest products:', error);
-      res.status(500).send('Server error');
-    }
-});
-
-
+    });
+    
+    // PUT update product price and its variants' quantity
+    router.put('/update/:id', async (req, res) => {
+        const productId = req.params.id;
+        const { price, variants } = req.body;
+    
+        let connection;
+        try {
+            connection = await pool.getConnection();
+            await connection.beginTransaction();
+    
+            // Update product price
+            await connection.query('UPDATE Product SET price = ? WHERE product_id = ?', [price, productId]);
+    
+            // Update product variants' quantities
+            for (const variant of variants) {
+                await connection.query('UPDATE ProductVariant SET quantity = ? WHERE product_id = ? AND size = ?', 
+                    [variant.quantity, productId, variant.size]);
+            }
+    
+            await connection.commit();
+            connection.release();
+            res.status(200).json({ message: 'Product price and variants updated successfully' });
+        } catch (err) {
+            if (connection) {
+                await connection.rollback();
+                connection.release();
+            }
+            console.error(err);
+            res.status(500).json({ error: 'Error updating product' });
+        }
+    });
+    
+    // Get the latest products
+    router.get('/latest', async (req, res) => {
+        try {
+            const query = `
+                SELECT 
+                    p.product_id, 
+                    p.Pname, 
+                    p.price AS productPrice, 
+                    p.images, 
+                    p.category,
+                    p.created_at,
+                    p.description 
+                FROM Product p
+                ORDER BY p.created_at DESC
+                LIMIT 4
+            `;
+    
+            const [latestProducts] = await pool.query(query);
+    
+            // Parse image URLs and map them to Cloudinary URLs
+            const productsWithImages = latestProducts.map(product => {
+                const images = JSON.parse(product.images).map(image => {
+                    // Assuming images are in the 'products' folder on Cloudinary
+                    return `https://res.cloudinary.com/duqbdikz0/image/upload/v1733890541/${image}`;
+                });
+                return { ...product, images };
+            });
+    
+            res.status(200).json(productsWithImages);
+        } catch (error) {
+            console.error('Error fetching latest products:', error);
+            res.status(500).send('Server error');
+        }
+    });
 // DELETE a product and its variants
 router.delete('/delete/:id', async (req, res) => {
     const productId = req.params.id;
@@ -190,29 +252,25 @@ router.delete('/delete/:id', async (req, res) => {
     }
 });
 // GET QR code for a specific product
-router.get('/:id/qr-id', (req, res) => {
+router.get('/:id/qr-id', async (req, res) => {
     const productId = req.params.id;
 
-    pool.query('SELECT qr_id FROM qrcode WHERE product_id = ?', [productId], (err, results) => {
-        if (err) {
-            console.error('Error retrieving QR code:', err);
-            return res.status(500).json({ error: 'Error retrieving QR code' });
-        }
+    try {
+        const [results] = await pool.query('SELECT qr_id FROM qrcode WHERE product_id = ?', [productId]);
 
         if (results.length === 0) {
             return res.status(404).json({ error: 'QR code not found for the product' });
         }
 
         const qrId = results[0].qr_id;
-        const qrImagePath = path.join(__dirname, 'qr-codes', `${qrId}.png`);
+        const qrImageUrl = `https://res.cloudinary.com/duqbdikz0/image/upload/v1733890541/qr-codes/${qrId}.png`;
 
-        res.download(qrImagePath, `product_${productId}_qr.png`, (downloadErr) => {
-            if (downloadErr) {
-                console.error('Error downloading QR code:', downloadErr);
-                res.status(500).json({ error: 'Error downloading QR code' });
-            }
-        });
-    });
+        // Set the response to download the QR code from Cloudinary
+        res.redirect(qrImageUrl); // This will trigger the download automatically in the browser
+    } catch (err) {
+        console.error('Error retrieving QR code:', err);
+        res.status(500).json({ error: 'Error retrieving QR code' });
+    }
 });
 
 // GENERATE QR code for a product
@@ -225,11 +283,6 @@ router.get('/generate-qr/:productId', (req, res) => {
     res.send(qrImage);
 });
 
-// TEST route
-router.get('/test', (req, res) => {
-    console.log('Test route hit');
-    res.send('Test route works');
-});
 
 // GET product details from the encoded identifier
 router.get('/product-details/:productId', (req, res) => {
@@ -250,6 +303,7 @@ router.get('/product-details/:productId', (req, res) => {
 router.get('/filter', async (req, res) => {
     const { category, gender } = req.query;
 
+    // Map gender categories to database-friendly values
     const genderMapping = {
         "Men's Wear": 'Male',
         "Women's Wear": 'Female',
@@ -258,39 +312,57 @@ router.get('/filter', async (req, res) => {
 
     const mappedGender = genderMapping[gender] || gender;
 
-    let productQuery = 'SELECT DISTINCT p.* FROM Product p WHERE 1=1';
+    // Base query for filtering products by category and including variants
+    let productQuery = 'SELECT DISTINCT p.* FROM Product p';
     let productParams = [];
 
+    // Adding condition for category if provided
     if (category && category !== '0') {
-        productQuery += ' AND p.category = ?';
+        productQuery += ' WHERE p.category = ?';
         productParams.push(category);
+    } else {
+        productQuery += ' WHERE 1=1';  // Add generic condition if category is not provided
     }
 
-    let variantQuery = 'SELECT pv.product_id FROM ProductVariant pv WHERE 1=1';
+    // Base query for filtering product variants
+    let variantQuery = 'SELECT DISTINCT pv.product_id FROM ProductVariant pv';
     let variantParams = [];
 
+    // Adding condition for gender if provided
     if (mappedGender) {
-        if (mappedGender !== 'Unisex') {
-            variantQuery += ' AND pv.gender = ?';
-            variantParams.push(mappedGender);
-        }
-    } else {
-        variantQuery = 'SELECT DISTINCT pv.product_id FROM ProductVariant pv';
+        variantQuery += ' WHERE pv.gender = ?';
+        variantParams.push(mappedGender);
     }
 
     try {
         const connection = await pool.getConnection();
+
+        // Fetch products based on the category
         const [products] = await connection.query(productQuery, productParams);
+
+        // Fetch variant results for the filtered gender
         const [variantResults] = await connection.query(variantQuery, variantParams);
+
+        // Release connection back to the pool
         connection.release();
 
+        // If no variants are found based on the gender, return an empty response
+        if (variantResults.length === 0) {
+            return res.status(404).json({ error: 'No products found for the given gender' });
+        }
+
+        // Create a set of product_ids that match the gender filter
         const variantProductIds = new Set(variantResults.map(v => v.product_id));
+
+        // Filter products by checking if their IDs match the ones from the variant query
         const filteredProducts = products.filter(product => variantProductIds.has(product.product_id));
 
+        // If no products match the criteria, return a 404
         if (filteredProducts.length === 0) {
             return res.status(404).json({ error: 'No products found' });
         }
 
+        // Return filtered products
         res.json(filteredProducts);
     } catch (error) {
         console.error('Error fetching products:', error);
@@ -359,13 +431,14 @@ router.get('/', async (req, res) => {
                     Pname: row.Pname,
                     category: row.category,
                     description: row.description,
-                    price: row.productPrice,
+                    price: parseFloat(row.productPrice), // Ensure price is parsed as a number
                     date: row.created_at,
-                    images: JSON.parse(row.images).map(image => `/uploads/${path.basename(image)}`),
+                    images: row.images ? JSON.parse(row.images) : [], // Ensure images are parsed correctly
                     variants: []
                 };
             }
 
+            // Add variants to product
             if (row.gender) {
                 acc[row.product_id].variants.push({
                     gender: row.gender,
@@ -377,21 +450,36 @@ router.get('/', async (req, res) => {
             return acc;
         }, {});
 
+        // Function to fetch Cloudinary URLs for product images
+        const fetchImageUrls = (imagePaths) => {
+            return imagePaths.map(imagePath => {
+                // Construct Cloudinary URL using a base URL for your Cloudinary account
+                return `https://res.cloudinary.com/duqbdikz0/image/upload/v1733890541/${imagePath}`;
+            });
+        };
+
+        // Update the products with Cloudinary image URLs
+        for (let productId in products) {
+            const product = products[productId];
+            // Fetch Cloudinary URLs
+            product.images = fetchImageUrls(product.images);
+        }
+
         // Convert the object to an array and sort by date in descending order
         const sortedProducts = Object.values(products).sort((a, b) => new Date(b.date) - new Date(a.date));
 
+        // Return the sorted products as JSON
         res.json(sortedProducts);
     } catch (error) {
         console.error('Error executing query:', error);
         res.status(500).json({ error: 'Error retrieving products' });
     }
 });
-
 router.get('/category-counts', async (req, res) => {
     try {
         const query = `
         SELECT category, COUNT(*) AS count
-        FROM product
+        FROM Product
         GROUP BY category
       `;
         const connection = await pool.getConnection();
@@ -428,7 +516,7 @@ router.get('/categories', async (req, res) => {
     }
 });
 
-// Route to get product by ID
+
 router.get('/:id', async (req, res) => {
     const productId = req.params.id;
     const query = `
@@ -462,6 +550,20 @@ router.get('/:id', async (req, res) => {
             return res.status(404).json({ error: 'Product not found' });
         }
 
+        // Function to fetch Cloudinary URLs
+        const fetchImageUrls = async (imagePaths) => {
+            try {
+                // Assuming the images are stored in Cloudinary's 'products' folder
+                const cloudinaryUrls = imagePaths.map(imagePath => {
+                    return `https://res.cloudinary.com/duqbdikz0/image/upload/v1733890541/${imagePath}`;
+                });
+                return cloudinaryUrls;
+            } catch (error) {
+                console.error('Error fetching Cloudinary image URLs:', error);
+                return [];
+            }
+        };
+
         const product = results.reduce((acc, row) => {
             if (!acc) {
                 acc = {
@@ -471,7 +573,7 @@ router.get('/:id', async (req, res) => {
                     description: row.description,
                     category: row.category,
                     date: row.created_at,
-                    images: JSON.parse(row.images).map(image => `/uploads/${path.basename(image)}`),
+                    images: JSON.parse(row.images), // Get the raw image paths from DB
                     variants: []
                 };
             }
@@ -488,6 +590,10 @@ router.get('/:id', async (req, res) => {
             return acc;
         }, null);
 
+        // Fetch Cloudinary URLs for the images
+        const imageUrls = await fetchImageUrls(product.images);
+        product.images = imageUrls; // Replace the raw paths with Cloudinary URLs
+
         res.status(200).json(product);
     } catch (error) {
         console.error('Error retrieving product:', error);
@@ -498,6 +604,7 @@ router.get('/:id', async (req, res) => {
 });
 
 
+
 router.get('/orders/all', async (req, res) => {
     try {
         // Fetch all orders and join with user details, including order status
@@ -505,12 +612,12 @@ router.get('/orders/all', async (req, res) => {
             SELECT 
                 Orders.*,
                 Orders.order_status,  -- Add the order_status column
-                CONCAT(accounts.fname, ' ', accounts.lname) AS name,
-                accounts.email AS email,
-                accounts.phone AS phone,
-                accounts.address AS address
+                CONCAT(Accounts.fname, ' ', Accounts.lname) AS name,
+                Accounts.email AS email,
+                Accounts.phone AS phone,
+                Accounts.address AS address
             FROM Orders
-            JOIN accounts ON Orders.account_id = accounts.account_id
+            JOIN Accounts ON Orders.account_id = Accounts.account_id
             ORDER BY Orders.created_at DESC
         `);
 
@@ -545,15 +652,16 @@ router.get('/orders/all', async (req, res) => {
         // Organize items under their respective orders
         const ordersWithItems = orders.map(order => ({
             ...order,
-            customer_name: order.customer_name,
-            customer_email: order.customer_email,
-            customer_phone: order.customer_phone,
-            customer_address: order.customer_address,
+            customer_name: order.name,
+            customer_email: order.email,
+            customer_phone: order.phone,
+            customer_address: order.address,
             items: orderItems
                 .filter(item => item.order_id === order.order_id)
                 .map(item => ({
                     ...item,
-                    images: JSON.parse(item.images).map(image => `/uploads/${image}`),
+                    images: JSON.parse(item.images).map(image => 
+                        `https://res.cloudinary.com/duqbdikz0/image/upload/v1733890541/${image}`), // Cloudinary URL
                     price_at_purchase: parseFloat(item.price_at_purchase)
                 }))
         }));
@@ -562,6 +670,35 @@ router.get('/orders/all', async (req, res) => {
     } catch (error) {
         console.error('Error retrieving all orders:', error);
         res.status(500).json({ error: 'Error retrieving all orders' });
+    }
+});
+
+router.put('/preparing-order/:order_id', authMiddleware, async (req, res) => {
+    const { order_id } = req.params;
+
+    try {
+        // Check if the order exists
+        const [order] = await pool.query('SELECT * FROM Orders WHERE order_id = ?', [order_id]);
+
+        if (order.length === 0) {
+            return res.status(404).json({ message: 'Order not found.' });
+        }
+
+        // Check if the order is already delivered
+        if (order[0].order_status === 'preparing') {
+            return res.status(400).json({ message: 'Order is already Preparing.' });
+        }
+
+        // Update the order status to Delivered and set delivered_at timestamp
+        await pool.query(
+            'UPDATE Orders SET order_status = ?, delivered_at = NOW() WHERE order_id = ?',
+            ['Preparing', order_id]
+        );
+
+        res.status(200).json({ message: 'Order status updated to Preparing.' });
+    } catch (error) {
+        console.error('Error updating order status:', error);
+        res.status(500).json({ error: 'Error updating order status.' });
     }
 });
 
@@ -663,12 +800,12 @@ router.get('/order/:id', authMiddleware, roleCheckMiddleware(['admin', 'employee
             const [order] = await pool.query(`
                 SELECT 
                     Orders.*,
-                    CONCAT(accounts.fname, ' ', accounts.lname) AS name,
-                    accounts.email,
-                    accounts.phone,
-                    accounts.address
+                    CONCAT(Accounts.fname, ' ', Accounts.lname) AS name,
+                    Accounts.email,
+                    Accounts.phone,
+                    Accounts.address
                 FROM Orders
-                JOIN accounts ON Orders.account_id = accounts.account_id
+                JOIN Accounts ON Orders.account_id = Accounts.account_id
                 WHERE Orders.order_id = ?
             `, [order_id]);
 
@@ -695,7 +832,8 @@ router.get('/order/:id', authMiddleware, roleCheckMiddleware(['admin', 'employee
             // Map images and ensure price_at_purchase is a number
             const itemsWithImages = orderItems.map(item => ({
                 ...item,
-                images: JSON.parse(item.images).map(image => `/uploads/${image}`), // Assuming images are stored under /uploads/
+                images: JSON.parse(item.images).map(image => 
+                    `https://res.cloudinary.com/duqbdikz0/image/upload/v1733890541/${image}`), // Cloudinary URL
                 price_at_purchase: parseFloat(item.price_at_purchase) // Ensure it's a number
             }));
 
@@ -709,12 +847,12 @@ router.get('/order/:id', authMiddleware, roleCheckMiddleware(['admin', 'employee
             const [order] = await pool.query(`
                 SELECT 
                     Orders.*,
-                    CONCAT(accounts.fname, ' ', accounts.lname) AS name, 
-                    accounts.email,
-                    accounts.phone,
-                    accounts.address
+                    CONCAT(Accounts.fname, ' ', Accounts.lname) AS name, 
+                    Accounts.email,
+                    Accounts.phone,
+                    Accounts.address
                 FROM Orders
-                JOIN accounts ON Orders.account_id = accounts.account_id
+                JOIN Accounts ON Orders.account_id = Accounts.account_id
                 WHERE Orders.order_id = ? AND Orders.account_id = ?
             `, [order_id, account_id]);
 
@@ -741,7 +879,8 @@ router.get('/order/:id', authMiddleware, roleCheckMiddleware(['admin', 'employee
             // Map images and ensure price_at_purchase is a number
             const itemsWithImages = orderItems.map(item => ({
                 ...item,
-                images: JSON.parse(item.images).map(image => `/uploads/${image}`), // Assuming images are stored under /uploads/
+                images: JSON.parse(item.images).map(image => 
+                    `https://res.cloudinary.com/duqbdikz0/image/upload/v1733890541/${image}`), // Cloudinary URL
                 price_at_purchase: parseFloat(item.price_at_purchase) // Ensure it's a number
             }));
 
@@ -824,9 +963,9 @@ router.get('/sales/sales', async (req, res) => {
     const monthStart = moment().startOf('month').format('YYYY-MM-DD HH:mm:ss');
 
     try {
-        const [salesToday] = await pool.query('SELECT SUM(total_amount) AS total FROM orders WHERE delivered_at >= ?', [todayStart]);
-        const [salesWeekly] = await pool.query('SELECT SUM(total_amount) AS total FROM orders WHERE delivered_at >= ?', [weekStart]);
-        const [salesMonthly] = await pool.query('SELECT SUM(total_amount) AS total FROM orders WHERE delivered_at >= ?', [monthStart]);
+        const [salesToday] = await pool.query('SELECT SUM(total_amount) AS total FROM Orders WHERE delivered_at >= ?', [todayStart]);
+        const [salesWeekly] = await pool.query('SELECT SUM(total_amount) AS total FROM Orders WHERE delivered_at >= ?', [weekStart]);
+        const [salesMonthly] = await pool.query('SELECT SUM(total_amount) AS total FROM Orders WHERE delivered_at >= ?', [monthStart]);
 
         res.status(200).json({
             salesToday: salesToday[0]?.total || 0,

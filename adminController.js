@@ -323,7 +323,7 @@ router.post('/create-employee', authMiddleware, roleCheckMiddleware('admin'), up
 router.get('/employee', async (req, res) => {
     try {
       // Query to get all accounts with role 'employee', including the account_id
-      const [rows] = await pool.query('SELECT account_id, username, fname, lname, email, age, address FROM accounts WHERE role = ?', ['employee']);
+      const [rows] = await pool.query('SELECT account_id, username, fname, lname, email, age, address FROM Accounts WHERE role = ?', ['employee']);
       
       if (rows.length > 0) {
         const employeeCount = rows.length;

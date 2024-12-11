@@ -202,12 +202,12 @@ router.get('/user-orders/:accountId', authMiddleware, async (req, res) => {
             SELECT 
                 Orders.*,
                 Orders.order_status,
-                CONCAT(accounts.fname, ' ', accounts.lname) AS name,
-                accounts.email,
-                accounts.phone,
-                accounts.address
+                CONCAT(Accounts.fname, ' ', Accounts.lname) AS name,
+                Accounts.email,
+                Accounts.phone,
+                Accounts.address
             FROM Orders
-            JOIN accounts ON Orders.account_id = accounts.account_id
+            JOIN Accounts ON Orders.account_id = Accounts.account_id
             WHERE Orders.account_id = ?
         `, [accountId]);
 
@@ -231,15 +231,24 @@ router.get('/user-orders/:accountId', authMiddleware, async (req, res) => {
                 WHERE OrderItem.order_id = ?
             `, [order.order_id]);
 
-            const itemsWithImages = orderItems.map(item => ({
-                ...item,
-                images: JSON.parse(item.images).map(image => `/uploads/${image}`),
-                price_at_purchase: parseFloat(item.price_at_purchase)
-            }));
+            // Process images and other item data
+            const itemsWithImages = orderItems.map(item => {
+                // Ensure the images are parsed as an array and then converted to Cloudinary URLs
+                const imageUrls = JSON.parse(item.images).map(imagePath => {
+                    // Assuming the image path is relative to the Cloudinary upload folder
+                    return `https://res.cloudinary.com/duqbdikz0/image/upload/v1733890541/${imagePath}`;
+                });
+
+                return {
+                    ...item,
+                    images: imageUrls,  // Update images to Cloudinary URLs
+                    price_at_purchase: parseFloat(item.price_at_purchase)
+                };
+            });
 
             return {
                 ...order,
-                items: itemsWithImages
+                items: itemsWithImages  // Add items with images to the order
             };
         }));
 
