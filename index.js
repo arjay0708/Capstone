@@ -15,7 +15,7 @@ const pool = require('./connection.js');
 
 // Use CORS for cross-origin requests
 app.use(cors({
-    origin: 'https://gaposource.com', // Adjust to match your Angular frontend URL
+    origin: 'https://capstone-orcin.vercel.app/', // Adjust to match your Angular frontend URL
 }));
 
 
