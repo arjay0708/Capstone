@@ -32,7 +32,7 @@ app.use('/customer', customerRouter);
 app.use('/cart', cartRouter);
 
 // Test database connection route
-app.get('/test-db-connection', async (req, res) => {
+app.get('/', async (req, res) => {
     try {
         const connection = await pool.getConnection(); // Get a connection from the pool
         connection.release(); // Release the connection immediately after testing
