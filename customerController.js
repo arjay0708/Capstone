@@ -24,7 +24,7 @@ const transporter = nodemailer.createTransport({
 
 // Define the sendVerificationEmail function
 async function sendVerificationEmail(email, fname, verificationToken) {
-    const verificationLink = `${process.env.BASE_URL}/customer/verify-email/${verificationToken}`;
+    const verificationLink = `https://capstone-orcin.vercel.app/customer/verify-email/${verificationToken}`;
 
     try {
         await transporter.sendMail({

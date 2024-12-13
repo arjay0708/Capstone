@@ -33,7 +33,6 @@ cloudinary.config({
   
   const upload = multer({ storage });
 
-  // POST route to create a product
 // POST route to create a product
     router.post('/', upload.array('images'), async (req, res) => {
     const { Pname, price, category, description, variants } = req.body;
@@ -84,7 +83,7 @@ cloudinary.config({
         );
 
         // Generate QR code URL (if you need to generate QR but not save it locally)
-        const qrURL = `https://gaposource.com/viewshop/inside/${productID}`;
+        const qrURL = `https://gaposource.com/#/viewshop/inside/${productID}`;
         const qrImage = qr.imageSync(qrURL, { type: 'png' });
 
         // Upload the QR code directly to Cloudinary, using product_id as the filename
@@ -228,8 +227,9 @@ cloudinary.config({
             res.status(500).send('Server error');
         }
     });
+
 // DELETE a product and its variants
-router.delete('/delete/:id', async (req, res) => {
+router.delete('/delete/:id',async (req, res) => {
     const productId = req.params.id;
 
     const connection = await pool.getConnection().catch(err => {
