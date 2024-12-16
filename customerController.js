@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
@@ -6,6 +7,7 @@ const pool = require('./connection'); // Ensure this points to your database con
 const { authMiddleware, roleCheckMiddleware } = require('./authMiddleware'); // Adjust the path if necessary
 require('dotenv').config(); // Ensure you have dotenv installed
 const nodemailer = require('nodemailer');
+
 const { v4: uuidv4 } = require('uuid'); // To generate a verification token
 
 // Setup for the email transport (using Gmail in this case)
@@ -86,6 +88,7 @@ router.post('/register', async (req, res) => {
 });
 
 
+
 // Email verification endpoint
 router.get('/verify-email/:token', async (req, res) => {
     const { token } = req.params;
@@ -148,7 +151,21 @@ router.post('/login', async (req, res) => {
             return res.status(401).send('Invalid username or password');
         }
 
-        // Generate a JWT token upon successful authentication
+        // Check if the password is temporary (is_temporary flag)
+        if (user.is_temporary === 1) {
+            // If the password is temporary, allow login but send a flag to prompt the user to change password
+            return res.status(200).json({
+                message: 'You are logged in with a temporary password. Please change your password.',
+                isTemporaryPassword: true,  // Flag indicating the user is using a temporary password
+                token: jwt.sign({ accountId: user.account_id }, process.env.JWT_SECRET_KEY, { expiresIn: '1h' }),
+                accountId: user.account_id,
+                role: user.role,
+                username: user.username,
+                profileImage: user.profile_image || '/assets/default-profile.png', // default image if not available
+            });
+        }
+
+        // Generate a JWT token upon successful authentication for regular password users
         const token = jwt.sign({ accountId: user.account_id }, process.env.JWT_SECRET_KEY, { expiresIn: '1h' });
 
         // Send the token, username, and profile image as a response
@@ -335,6 +352,126 @@ router.put('/edit-profile', authMiddleware, async (req, res) => {
 });
 
 
+router.post('/retrieve-account', async (req, res) => {
+    const { email } = req.body;
 
+    if (!email) {
+        return res.status(400).json({ message: 'Email is required.' });
+    }
+
+    try {
+        // Check if the email exists in the database
+        const [results] = await pool.query(
+            'SELECT username, password, verification_token FROM Accounts WHERE email = ?',
+            [email]
+        );
+
+        if (results.length === 0) {
+            return res.status(404).json({ message: 'No account found with this email.' });
+        }
+
+        const account = results[0];
+
+        // Generate a temporary password (e.g., 12 random characters)
+        const temporaryPassword = crypto.randomBytes(6).toString('hex'); // 12-character password (6 bytes hex)
+
+        // Hash the temporary password before saving it (use bcrypt to securely hash it)
+        const hashedTemporaryPassword = await bcrypt.hash(temporaryPassword, 12);
+
+        // Update the account with the hashed temporary password (optional: mark it as 'temporary')
+        await pool.query(
+            'UPDATE Accounts SET password = ?, is_temporary = 1 WHERE email = ?',
+            [hashedTemporaryPassword, email]
+        );
+
+        // Email content
+        const emailSubject = 'Temporary Password for Your Account';
+        const emailBody = `
+            Hello,
+
+            Here is your temporary password for your account:
+
+            Temporary Password: ${temporaryPassword}
+
+            Please use this password to log in. Once logged in, you will be prompted to change your password.
+
+            If you did not request this, please ignore this email.
+
+            Regards,
+            Your App Support Team
+        `;
+
+        // Send email
+        await transporter.sendMail({
+            from: `"Your App Support" <${process.env.EMAIL_USER}>`,
+            to: email,
+            subject: emailSubject,
+            text: emailBody,
+        });
+
+        return res.status(200).json({
+            message: 'A temporary password has been sent to your registered email.',
+        });
+    } catch (error) {
+        console.error('Error retrieving account details:', error);
+        return res.status(500).json({ message: 'Internal server error.' });
+    }
+});
+
+
+router.post('/reset-password/:token', async (req, res) => {
+    const { token } = req.params;
+    const { newPassword, confirmPassword } = req.body;
+
+    // Check if the new password and confirm password are provided
+    if (!newPassword || !confirmPassword) {
+        return res.status(400).json({ message: 'New password and confirm password are required.' });
+    }
+
+    // Check if the new password and confirm password match
+    if (newPassword !== confirmPassword) {
+        return res.status(400).json({ message: 'New password and confirm password do not match.' });
+    }
+
+    // Password validation (at least 1 uppercase, 1 number, 1 special character)
+    const passwordRegex = /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*])[A-Za-z\d!@#$%^&*]{8,}$/;
+    if (!passwordRegex.test(newPassword)) {
+        return res.status(400).json({
+            message: 'Password must be at least 8 characters long and contain at least one uppercase letter, one number, and one special character.'
+        });
+    }
+
+    try {
+        // Find the user by the reset token
+        const [results] = await pool.query(
+            'SELECT * FROM Accounts WHERE verification_token = ?',
+            [token]
+        );
+
+        if (results.length === 0) {
+            return res.status(404).json({ message: 'Invalid or expired token.' });
+        }
+
+        const account = results[0];
+
+        // Hash the new password
+        const hashedPassword = await bcrypt.hash(newPassword, 12);
+
+        // Update the user's password (no need to reset the token here)
+        const [updateResult] = await pool.query(
+            'UPDATE Accounts SET password = ? WHERE account_id = ?',
+            [hashedPassword, account.account_id]
+        );
+
+        if (updateResult.affectedRows > 0) {
+            return res.status(200).json({ message: 'Password has been reset successfully.' });
+        } else {
+            return res.status(500).json({ message: 'Failed to reset password.' });
+        }
+    } catch (error) {
+        console.error('Error resetting password:', error);
+        return res.status(500).json({ message: 'Internal server error.' });
+    }
+});
 
 module.exports = router;

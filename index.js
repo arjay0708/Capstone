@@ -5,6 +5,7 @@ const bodyParser = require('body-parser');
 const mysql = require('mysql2');
 const adminRouter = require('./adminController.js');
 const productRouter = require('./productController.js');
+const paymentRouter = require('./paymentController.js');
 const qrcodeRouter = require('./qrcodeController.js');
 const countsRouter = require('./viewcounter.js');
 const customerRouter = require('./customerController.js');
@@ -24,6 +25,7 @@ app.use(bodyParser.json());
 // Enable CORS for all routes
 app.use('/admins', adminRouter);
 app.use('/products', productRouter);
+app.use('/payments', paymentRouter);
 app.use('/qrcodes', qrcodeRouter);
 app.use('/counts', countsRouter);
 app.use('/customer', customerRouter);

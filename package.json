@@ -10,6 +10,8 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@babel/runtime": "^7.26.0",
+    "axios": "^1.7.9",
     "bcryptjs": "^2.4.3",
     "body-parser": "^1.20.2",
     "cloudinary": "^1.41.3",
@@ -26,6 +28,7 @@
     "node-cron": "^3.0.3",
     "node-fetch": "^2.7.0",
     "nodemailer": "^6.9.16",
+    "paymongo": "^1.3.2",
     "punycode": "^2.3.1",
     "qr-image": "^3.2.0",
     "qrcode": "^1.5.3",

@@ -77,14 +77,29 @@ CREATE TABLE Orders (
     order_id INT PRIMARY KEY AUTO_INCREMENT,
     account_id INT,
     total_amount DECIMAL(10, 2),
-    order_status ENUM('Pending', 'Preparing','Shipped', 'Delivered', 'Cancelled') DEFAULT 'Pending',
+    order_status ENUM('Pending', 'Preparing', 'Shipped', 'Delivered', 'Cancelled') DEFAULT 'Pending',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     delivered_at DATETIME NULL,
     shipped_at DATETIME NULL,
+    payment_method VARCHAR(50) NOT NULL DEFAULT 'COD', 
+    payment_status VARCHAR(50) DEFAULT 'pending',
     tracking_number VARCHAR(50),
-     carrier VARCHAR(50),
+    carrier VARCHAR(50),
+    cancel_reason VARCHAR(255) DEFAULT NULL,
     FOREIGN KEY (account_id) REFERENCES Accounts(account_id) ON DELETE CASCADE
 );
+
+CREATE TABLE Payments (
+    payment_id INT PRIMARY KEY AUTO_INCREMENT,
+    order_id INT,
+    payment_method VARCHAR(50) NOT NULL,
+    payment_status VARCHAR(50) DEFAULT 'pending',
+    payment_amount DECIMAL(10, 2) NOT NULL, 
+    payment_reference VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (order_id) REFERENCES Orders(order_id) ON DELETE CASCADE
+);
+
 
 /* OrderItem table */
 CREATE TABLE OrderItem (

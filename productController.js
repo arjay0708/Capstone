@@ -711,6 +711,7 @@ router.put('/ship-order/:order_id', authMiddleware, roleCheckMiddleware(['admin'
     }
 
     try {
+        // Check if the order exists
         const [order] = await pool.query('SELECT * FROM Orders WHERE order_id = ?', [order_id]);
 
         if (order.length === 0) {
@@ -721,7 +722,19 @@ router.put('/ship-order/:order_id', authMiddleware, roleCheckMiddleware(['admin'
             return res.status(400).json({ message: `Order is already ${order[0].order_status.toLowerCase()}.` });
         }
 
-        // Update status to "Shipped"
+        // Check for duplicate tracking number within the same carrier
+        const [existingTracking] = await pool.query(
+            'SELECT * FROM Orders WHERE tracking_number = ? AND carrier = ?',
+            [tracking_number, carrier]
+        );
+
+        if (existingTracking.length > 0) {
+            return res.status(400).json({
+                message: `Tracking number "${tracking_number}" is already in use for carrier "${carrier}".`
+            });
+        }
+
+        // Update order status to "Shipped" with tracking information
         await pool.query(
             'UPDATE Orders SET order_status = ?, tracking_number = ?, carrier = ?, shipped_at = NOW() WHERE order_id = ?',
             ['Shipped', tracking_number, carrier, order_id]
@@ -921,7 +934,7 @@ router.put('/order/:id/status', authMiddleware, async (req, res) => {
 // Delete an order (cancel the order)
 router.put('/cancel/:id/status', authMiddleware, async (req, res) => {
     const order_id = req.params.id; // Extract order ID from the request parameters
-    const { status } = req.body;   // Expect status in the request body
+    const { status, cancel_reason } = req.body; // Expect status and cancel_reason in the request body
 
     try {
         // Check the current status of the order
@@ -938,17 +951,25 @@ router.put('/cancel/:id/status', authMiddleware, async (req, res) => {
             return res.status(400).json({ message: 'Order can only be cancelled if it is in "Pending" status.' });
         }
 
-        // Update the order status to 'Cancelled'
+        // If the status is 'Cancelled', cancel_reason must be provided
+        if (status === 'Cancelled' && !cancel_reason) {
+            return res.status(400).json({ message: 'Cancel reason is required when status is "Cancelled".' });
+        }
+
+        // If cancel_reason is not provided, set it to NULL
+        const reasonToSet = cancel_reason || null;
+
+        // Update the order status to 'Cancelled' and include the cancel_reason
         const [result] = await pool.query(
-            'UPDATE Orders SET order_status = ? WHERE order_id = ?',
-            ['Cancelled', order_id]
+            'UPDATE Orders SET order_status = ?, cancel_reason = ? WHERE order_id = ?',
+            ['Cancelled', reasonToSet, order_id] // Use null if no reason provided
         );
 
         if (result.affectedRows === 0) {
             return res.status(404).json({ message: 'Order not found or already cancelled' });
         }
 
-        res.status(200).json({ message: 'Order successfully cancelled' });
+        res.status(200).json({ message: 'Order successfully cancelled', cancel_reason: reasonToSet });
     } catch (error) {
         console.error('Error updating order status:', error);
         res.status(500).json({ error: 'An error occurred while cancelling the order' });
