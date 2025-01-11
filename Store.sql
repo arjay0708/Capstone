@@ -81,6 +81,7 @@ CREATE TABLE Orders (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     delivered_at DATETIME NULL,
     shipped_at DATETIME NULL,
+    date_received DATETIME NULL,
     payment_method VARCHAR(50) NOT NULL DEFAULT 'COD', 
     payment_status VARCHAR(50) DEFAULT 'pending',
     tracking_number VARCHAR(50),

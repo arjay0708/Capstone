@@ -34,21 +34,15 @@ cloudinary.config({
   const upload = multer({ storage });
 
 // POST route to create a product
-    router.post('/', upload.array('images'), async (req, res) => {
+router.post('/', upload.array('images'), async (req, res) => {
     const { Pname, price, category, description, variants } = req.body;
 
-    // Log received files and data for debugging
-    console.log('Received files:', req.files);
-    console.log('Received body data:', { Pname, price, category, description, variants });
-
-    // Check if files were uploaded
-    if (!req.files || req.files.length === 0) {
-        return res.status(400).json({ error: 'No files uploaded' });
+    // Validate input fields
+    if (!Pname || !price || !category || !variants) {
+        return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    const images = req.files.map(file => file.filename); // Get the uploaded filenames
-
-    // Ensure variants is an array
+    // Parse variants to ensure correct format
     let parsedVariants = [];
     try {
         parsedVariants = Array.isArray(variants) ? variants : JSON.parse(variants);
@@ -57,16 +51,30 @@ cloudinary.config({
         return res.status(400).json({ error: 'Invalid variants data' });
     }
 
+    // Check for uploaded files
+    if (!req.files || req.files.length === 0) {
+        return res.status(400).json({ error: 'No images uploaded' });
+    }
+
+    const images = req.files.map(file => file.filename); // Extract filenames
+    const imagesJson = JSON.stringify(images); // Convert to JSON string for storage
+
     let connection;
 
     try {
         connection = await pool.getConnection();
         await connection.beginTransaction();
 
-        // Convert images array to JSON string
-        const imagesJson = JSON.stringify(images);
+        // Check if a product with the same name already exists
+        const [existingProduct] = await connection.query(
+            'SELECT COUNT(*) AS count FROM Product WHERE Pname = ?',
+            [Pname]
+        );
+        if (existingProduct[0].count > 0) {
+            return res.status(400).json({ error: 'A product with this name already exists' });
+        }
 
-        // Insert the product data into the database
+        // Insert the product into the database
         const [productResult] = await connection.query(
             'INSERT INTO Product (Pname, price, images, category, description) VALUES (?, ?, ?, ?, ?)',
             [Pname, price, imagesJson, category, description]
@@ -74,7 +82,7 @@ cloudinary.config({
 
         const productID = productResult.insertId;
 
-        // Validate and insert variants
+        // Insert variants
         const variantQueries = parsedVariants.map(variant =>
             connection.query(
                 'INSERT INTO ProductVariant (product_id, gender, size, quantity) VALUES (?, ?, ?, ?)',
@@ -82,59 +90,29 @@ cloudinary.config({
             )
         );
 
-        // Generate QR code URL (if you need to generate QR but not save it locally)
-        const qrURL = `https://gaposource.com/#/viewshop/inside/${productID}`;
-        const qrImage = qr.imageSync(qrURL, { type: 'png' });
+        await Promise.all(variantQueries);
 
-        // Upload the QR code directly to Cloudinary, using product_id as the filename
-        const qrImageUpload = await cloudinary.uploader.upload_stream(
-            {
-                folder: 'qr-codes', // Specify the folder in Cloudinary
-                public_id: `product_${productID}`, // Use product_id as the filename (public_id)
-                resource_type: 'image', // Image resource type
-            },
-            (error, result) => {
-                if (error) {
-                    console.error('Error uploading QR code to Cloudinary:', error);
-                    return res.status(500).send('Error uploading QR code');
-                }
-                const qrCodeUrl = result.secure_url;
+        // Commit the transaction
+        await connection.commit();
 
-                // Insert the variants into the database
-                Promise.all(variantQueries)
-                    .then(async () => {
-                        await connection.commit();
-
-                        // Return the response with product creation and QR code URL
-                        res.status(201).json({
-                            message: `Product created with ID: ${productID}`,
-                            qr_code_url: qrCodeUrl,  // Return QR code URL from Cloudinary
-                        });
-                    })
-                    .catch(async (error) => {
-                        console.error('Error inserting variants:', error);
-                        await connection.rollback();
-                        res.status(500).json({ error: 'Error inserting variants' });
-                    });
-            }
-        );
-
-        // Pipe the QR image to Cloudinary
-        qrImageUpload.end(qrImage);
+        res.status(201).json({ message: 'Product created successfully', productID });
     } catch (error) {
         console.error('Error creating product:', error);
+
         if (connection) {
             try {
                 await connection.rollback();
             } catch (rollbackError) {
-                console.error('Error rolling back transaction:', rollbackError);
+                console.error('Error during rollback:', rollbackError);
             }
         }
+
         res.status(500).json({ error: 'Error creating product' });
     } finally {
         if (connection) connection.release();
     }
-    });
+});
+
   
     router.get('/image/*', async (req, res) => {
         const imagePath = req.params[0]; // Get the image path after /image/
@@ -171,13 +149,28 @@ cloudinary.config({
             connection = await pool.getConnection();
             await connection.beginTransaction();
     
-            // Update product price
-            await connection.query('UPDATE Product SET price = ? WHERE product_id = ?', [price, productId]);
+            // Update product price if provided
+            if (price !== undefined) {
+                await connection.query(
+                    'UPDATE Product SET price = ? WHERE product_id = ?',
+                    [price, productId]
+                );
+            }
     
             // Update product variants' quantities
-            for (const variant of variants) {
-                await connection.query('UPDATE ProductVariant SET quantity = ? WHERE product_id = ? AND size = ?', 
-                    [variant.quantity, productId, variant.size]);
+            if (variants && variants.length > 0) {
+                for (const variant of variants) {
+                    await connection.query(
+                        'UPDATE ProductVariant SET quantity = ? WHERE product_id = ? AND size = ?',
+                        [variant.quantity, productId, variant.size]
+                    );
+                }
+    
+                // Ensure the `updated_at` column in `Product` is updated when variants are modified
+                await connection.query(
+                    'UPDATE Product SET updated_at = NOW() WHERE product_id = ?',
+                    [productId]
+                );
             }
     
             await connection.commit();
@@ -207,7 +200,7 @@ cloudinary.config({
                     p.description 
                 FROM Product p
                 ORDER BY p.created_at DESC
-                LIMIT 4
+                LIMIT 40
             `;
     
             const [latestProducts] = await pool.query(query);
@@ -372,18 +365,35 @@ router.get('/filter', async (req, res) => {
 
 // SEARCH products by name
 router.get('/search', async (req, res) => {
-    const { search } = req.query;
+    const { search, category, gender } = req.query;
 
-    if (!search) {
-        return res.status(400).json({ error: 'Search query parameter is required' });
+    if (!search && !category && !gender) {
+        return res.status(400).json({ error: 'At least one query parameter (search, category, or gender) is required' });
     }
 
     try {
         const connection = await pool.getConnection();
-        const [results] = await connection.query(
-            'SELECT * FROM Product WHERE Pname LIKE ?',
-            [`%${search}%`]
-        );
+        
+        // Build the dynamic query and parameters
+        let query = 'SELECT * FROM Product WHERE 1=1';
+        const params = [];
+
+        if (search) {
+            query += ' AND Pname LIKE ?';
+            params.push(`%${search}%`);
+        }
+
+        if (category) {
+            query += ' AND category = ?';
+            params.push(category);
+        }
+
+        if (gender) {
+            query += ' AND gender = ?';
+            params.push(gender);
+        }
+
+        const [results] = await connection.query(query, params);
         connection.release();
 
         if (results.length === 0) {
@@ -406,6 +416,7 @@ router.get('/', async (req, res) => {
             p.images, 
             p.category,
             p.created_at,
+            p.updated_at,
             p.description, 
             pv.gender, 
             pv.size, 
@@ -433,6 +444,7 @@ router.get('/', async (req, res) => {
                     description: row.description,
                     price: parseFloat(row.productPrice), // Ensure price is parsed as a number
                     date: row.created_at,
+                    updated_at: row.updated_at,
                     images: row.images ? JSON.parse(row.images) : [], // Ensure images are parsed correctly
                     variants: []
                 };
@@ -603,8 +615,6 @@ router.get('/:id', async (req, res) => {
     }
 });
 
-
-
 router.get('/orders/all', async (req, res) => {
     try {
         // Fetch all orders and join with user details, including order status
@@ -760,7 +770,6 @@ router.put('/ship-order/:order_id', authMiddleware, roleCheckMiddleware(['admin'
     }
 });
 
-
 router.put('/deliver-order/:order_id', authMiddleware, async (req, res) => {
     const { order_id } = req.params;
 
@@ -777,9 +786,9 @@ router.put('/deliver-order/:order_id', authMiddleware, async (req, res) => {
             return res.status(400).json({ message: 'Order is already delivered.' });
         }
 
-        // Update the order status to Delivered and set delivered_at timestamp
+        // Update the order status to Delivered, set delivered_at timestamp, and set date_received to NOW()
         await pool.query(
-            'UPDATE Orders SET order_status = ?, delivered_at = NOW() WHERE order_id = ?',
+            'UPDATE Orders SET order_status = ?, delivered_at = NOW(), date_received = NOW() WHERE order_id = ?',
             ['Delivered', order_id]
         );
 
@@ -789,6 +798,7 @@ router.put('/deliver-order/:order_id', authMiddleware, async (req, res) => {
         res.status(500).json({ error: 'Error updating order status.' });
     }
 });
+
 
 // Read all orders for the logged-in user
 router.get('/orders', authMiddleware, async (req, res) => {
@@ -984,19 +994,27 @@ router.get('/sales/sales', async (req, res) => {
     const monthStart = moment().startOf('month').format('YYYY-MM-DD HH:mm:ss');
 
     try {
+        // Existing sales calculations
         const [salesToday] = await pool.query('SELECT SUM(total_amount) AS total FROM Orders WHERE delivered_at >= ?', [todayStart]);
         const [salesWeekly] = await pool.query('SELECT SUM(total_amount) AS total FROM Orders WHERE delivered_at >= ?', [weekStart]);
         const [salesMonthly] = await pool.query('SELECT SUM(total_amount) AS total FROM Orders WHERE delivered_at >= ?', [monthStart]);
 
+        // New calculations for total cancelled and delivered orders
+        const [cancelledOrdersTotal] = await pool.query('SELECT COUNT(*) AS cancelled FROM Orders WHERE order_status = "cancelled"');
+        const [deliveredOrdersTotal] = await pool.query('SELECT COUNT(*) AS delivered FROM Orders WHERE order_status = "delivered"');
+
         res.status(200).json({
             salesToday: salesToday[0]?.total || 0,
             salesWeekly: salesWeekly[0]?.total || 0,
-            salesMonthly: salesMonthly[0]?.total || 0
+            salesMonthly: salesMonthly[0]?.total || 0,
+            cancelledOrdersTotal: cancelledOrdersTotal[0]?.cancelled || 0,
+            deliveredOrdersTotal: deliveredOrdersTotal[0]?.delivered || 0
         });
     } catch (err) {
         res.status(500).json({ error: 'Error retrieving sales data' });
     }
 });
+
 
 
 

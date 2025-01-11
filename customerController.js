@@ -241,7 +241,8 @@ router.get('/user-orders/:accountId', authMiddleware, async (req, res) => {
                     OrderItem.quantity,
                     OrderItem.price_at_purchase,
                     Product.Pname,
-                    Product.images
+                    Product.images,
+                    ProductVariant.size
                 FROM OrderItem
                 JOIN ProductVariant ON OrderItem.product_variant_id = ProductVariant.variant_id
                 JOIN Product ON ProductVariant.product_id = Product.product_id
