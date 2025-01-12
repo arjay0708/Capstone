@@ -7,6 +7,7 @@ const pool = require('./connection'); // Ensure this points to your database con
 const { authMiddleware, roleCheckMiddleware } = require('./authMiddleware'); // Adjust the path if necessary
 require('dotenv').config(); // Ensure you have dotenv installed
 const nodemailer = require('nodemailer');
+const { logCustomerActivity } = require('./customerLogger');
 
 const { v4: uuidv4 } = require('uuid'); // To generate a verification token
 
@@ -75,6 +76,9 @@ router.post('/register', async (req, res) => {
         );
 
         if (result.affectedRows > 0) {
+            // Log registration activity
+            await logCustomerActivity(username, 'Registration successful', 'REGISTER');
+
             // Send verification email with a link containing the token
             await sendVerificationEmail(email, fname, verificationToken);
             return res.status(201).json({ message: 'Registration successful. Please verify your email.' });
@@ -86,6 +90,7 @@ router.post('/register', async (req, res) => {
         return res.status(500).send('Server error');
     }
 });
+
 
 
 
@@ -129,7 +134,7 @@ router.post('/login', async (req, res) => {
             return res.status(400).send('Username and password are required');
         }
 
-        // Query to get the customer by username, ensure the role is 'customer'
+        // Query to get the customer by username
         const [results] = await pool.query(
             'SELECT * FROM Accounts WHERE username = ? AND role = "customer"',
             [username]
@@ -139,48 +144,39 @@ router.post('/login', async (req, res) => {
             return res.status(401).send('Invalid username or password');
         }
 
-        // Check if the account is verified (1 for verified, 0 for not verified)
         const user = results[0];
+
         if (user.is_verified === 0) {
             return res.status(401).send('Please verify your email before logging in.');
         }
 
-        // Compare the hashed password with the provided password
         const match = await bcrypt.compare(password, user.password);
         if (!match) {
             return res.status(401).send('Invalid username or password');
         }
 
-        // Check if the password is temporary (is_temporary flag)
-        if (user.is_temporary === 1) {
-            // If the password is temporary, allow login but send a flag to prompt the user to change password
-            return res.status(200).json({
-                message: 'You are logged in with a temporary password. Please change your password.',
-                isTemporaryPassword: true,  // Flag indicating the user is using a temporary password
-                token: jwt.sign({ accountId: user.account_id }, process.env.JWT_SECRET_KEY, { expiresIn: '1h' }),
-                accountId: user.account_id,
-                role: user.role,
-                username: user.username,
-                profileImage: user.profile_image || '/assets/default-profile.png', // default image if not available
-            });
-        }
+        // Log successful login attempt
+        console.log('Attempting to log customer activity...');
+        await logCustomerActivity(username, 'Login successful', 'LOGIN');
+        console.log('Logged customer activity');
 
-        // Generate a JWT token upon successful authentication for regular password users
         const token = jwt.sign({ accountId: user.account_id }, process.env.JWT_SECRET_KEY, { expiresIn: '1h' });
 
-        // Send the token, username, and profile image as a response
         res.status(200).json({
             token,
             accountId: user.account_id,
             role: user.role,
             username: user.username,
-            profileImage: user.profile_image || '/assets/default-profile.png', // default image if not available
+            profileImage: user.profile_image || '/assets/default-profile.png',
         });
     } catch (error) {
         console.error('Error during authentication:', error);
         res.status(500).send('Server error');
     }
 });
+
+
+
 
 router.get('/buyer-details', authMiddleware, async (req, res) => {
     const account_id = req.user.account_id; // Retrieved from the middleware (authenticated user)
@@ -278,7 +274,7 @@ router.get('/user-orders/:accountId', authMiddleware, async (req, res) => {
 });
 
 router.put('/edit-profile', authMiddleware, async (req, res) => {
-    const { username, email, phone, oldPassword, newPassword } = req.body;
+    const { username, phone, oldPassword, newPassword } = req.body;
     const accountId = req.user.account_id; // Retrieved from authMiddleware
 
     try {
@@ -292,7 +288,6 @@ router.put('/edit-profile', authMiddleware, async (req, res) => {
         const updateFields = [];
         const params = [];
 
-        // Update username (only if it's provided and has not been updated before)
         if (username) {
             if (user.username_updated) {
                 return res.status(400).json({ message: 'Username can only be updated once.' });
@@ -301,13 +296,9 @@ router.put('/edit-profile', authMiddleware, async (req, res) => {
             params.push(username);
         }
 
-        // Update email
-        if (email) {
-            updateFields.push('email = ?');
-            params.push(email);
-        }
+        // Removed email field from update logic
+        // If you want to log profile changes, you can track username and phone updates below
 
-        // Update phone number
         if (phone) {
             if (!/^[0-9]{11}$/.test(phone)) {
                 return res.status(400).json({ message: 'Phone number must be 11 digits.' });
@@ -316,7 +307,6 @@ router.put('/edit-profile', authMiddleware, async (req, res) => {
             params.push(phone);
         }
 
-        // Update password
         if (oldPassword && newPassword) {
             const isMatch = await bcrypt.compare(oldPassword, user.password);
             if (!isMatch) {
@@ -334,14 +324,14 @@ router.put('/edit-profile', authMiddleware, async (req, res) => {
             return res.status(400).json({ message: 'No updates provided.' });
         }
 
-        // Append the accountId for the WHERE clause
         params.push(accountId);
 
-        // Perform the update query
         const updateQuery = `UPDATE Accounts SET ${updateFields.join(', ')} WHERE account_id = ?`;
         const [result] = await pool.query(updateQuery, params);
 
         if (result.affectedRows > 0) {
+            // Log profile update activity without email change
+            await logCustomerActivity(username, 'Profile updated successfully', 'UPDATE_PROFILE');
             return res.status(200).json({ message: 'Profile updated successfully.' });
         } else {
             return res.status(500).json({ message: 'Failed to update profile.' });
@@ -351,6 +341,8 @@ router.put('/edit-profile', authMiddleware, async (req, res) => {
         res.status(500).json({ message: 'Internal server error.' });
     }
 });
+
+
 
 
 router.post('/retrieve-account', async (req, res) => {

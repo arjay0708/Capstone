@@ -9,6 +9,7 @@ const fs = require('fs');
 const qr = require('qr-image'); // Ensure you have this library installed
 require('dotenv').config(); // Ensure you have dotenv installed
 const { authMiddleware, roleCheckMiddleware } = require('./authMiddleware'); // Adjust the path if necessary
+const { logLoginActivity } = require('./googleSheets');
 
 
 // Configure multer for file uploads
@@ -95,22 +96,31 @@ router.post('/login', async (req, res) => {
         const [results] = await pool.query('SELECT * FROM Accounts WHERE username = ?', [username]);
 
         if (results.length === 0) {
+            // Log failed login attempt
+            await logLoginActivity(username, 'Unknown', 'Failed: No user found', 'login');
             return res.status(401).send('Invalid username or password');
         }
 
         const match = await bcrypt.compare(password, results[0].password);
         if (!match) {
+            // Log failed login attempt
+            await logLoginActivity(username, 'Unknown', 'Failed: Incorrect password', 'login');
             return res.status(401).send('Invalid username or password');
         }
 
         // Check if the user role is 'admin' or 'employee'
         const role = results[0].role;
         if (role !== 'admin' && role !== 'employee') {
+            // Log failed login attempt
+            await logLoginActivity(username, role, 'Failed: Access denied', 'login');
             return res.status(403).send('Access denied. Only admins and employees can log in.');
         }
 
         // If the credentials are valid, generate a JWT token
-        const token = jwt.sign({ accountId: results[0].account_id, role: role }, process.env.JWT_SECRET_KEY, { expiresIn: '1h' }); // Use environment variable for secret key
+        const token = jwt.sign({ accountId: results[0].account_id, role: role }, process.env.JWT_SECRET_KEY, { expiresIn: '1h' });
+
+        // Log successful login
+        await logLoginActivity(username, role, 'Success', 'login');
 
         res.status(200).json({ token, role });
 
@@ -120,40 +130,48 @@ router.post('/login', async (req, res) => {
     }
 });
 
+
+
 router.put('/changepassword', verifyToken, async (req, res) => {
     const { currentPassword, newPassword } = req.body;
     const accountId = req.accountId;
 
-    console.log("Account ID:", accountId);  // Log Account ID
-
     try {
         if (!currentPassword || !newPassword) {
+            // Log failed password change due to missing current or new password
+            await logLoginActivity(accountId, 'N/A', 'Failed: Missing password', 'change password');
             return res.status(400).json({ error: 'Current and new passwords are required' });
         }
 
-        const [results] = await pool.query('SELECT password FROM accounts WHERE account_id = ?', [accountId]);
-
+        const [results] = await pool.query('SELECT password, role FROM Accounts WHERE account_id = ?', [accountId]);
 
         if (results.length === 0) {
+            // Log failed password change due to account not found
+            await logLoginActivity(accountId, 'N/A', 'Failed: Account not found', 'change password');
             return res.status(404).json({ error: 'Account not found' });
         }
 
         const storedPassword = results[0].password;
         const isMatch = await bcrypt.compare(currentPassword, storedPassword);
 
-        console.log("Password match:", isMatch);  // Log password match outcome
-
         if (!isMatch) {
+            // Log failed password change due to incorrect password
+            await logLoginActivity(accountId, results[0].role, 'Failed: Incorrect current password', 'change password');
             return res.status(401).json({ error: 'Current password is incorrect' });
         }
 
         const hashedNewPassword = await bcrypt.hash(newPassword, 10);
 
-        await pool.query('UPDATE accounts SET password = ? WHERE account_id = ?', [hashedNewPassword, accountId]);
+        await pool.query('UPDATE Accounts SET password = ? WHERE account_id = ?', [hashedNewPassword, accountId]);
+
+        // Log successful password change
+        await logLoginActivity(accountId, results[0].role, 'Success: Password updated successfully', 'change password');
 
         res.status(200).json({ message: 'Password updated successfully' });
+
     } catch (error) {
-        console.error('Error changing password:', error);  // Log detailed error
+        console.error('Error changing password:', error);
+        await logLoginActivity(accountId, 'N/A', 'Failed: Server error', 'change password');
         res.status(500).json({ error: 'Server error. Please try again later.' });
     }
 });
@@ -200,6 +218,9 @@ router.post('/', async (req, res) => {
         // Commit the transaction
         await connection.commit();
 
+        // Log product creation success
+        await logLoginActivity(req.username || 'N/A', req.role || 'N/A', 'Success', 'create product');
+
         res.status(201).json({
             message: `Product created with ID: ${productID}`,
             qr_id: productID // Assuming the product ID is used as qr_id
@@ -213,11 +234,16 @@ router.post('/', async (req, res) => {
                 console.error('Error rolling back transaction:', rollbackError);
             }
         }
+
+        // Log product creation failure
+        await logLoginActivity(req.username || 'N/A', req.role || 'N/A', 'Failed', 'create product');
+
         res.status(500).json({ error: 'Error creating product' });
     } finally {
         if (connection) connection.release();
     }
 });
+
 
 // Admin edit endpoint
 router.put('/:adminId', verifyToken, upload.single('image'), async (req, res) => {
@@ -289,6 +315,7 @@ router.post('/create-employee', authMiddleware, roleCheckMiddleware('admin'), up
     try {
         // Ensure required fields are defined
         if (!username || !password || !fname || !lname || !email) {
+            await logLoginActivity(req.user?.username || 'N/A', req.user?.role || 'N/A', 'Failed', 'create employee');
             return res.status(400).json({ error: 'Missing required fields' });
         }
 
@@ -296,6 +323,7 @@ router.post('/create-employee', authMiddleware, roleCheckMiddleware('admin'), up
         const [existingEmployee] = await pool.query('SELECT * FROM Accounts WHERE username = ?', [username]);
 
         if (existingEmployee.length > 0) {
+            await logLoginActivity(req.user?.username || 'N/A', req.user?.role || 'N/A', 'Failed', 'create employee');
             return res.status(409).json({ error: 'Employee with this username already exists' });
         }
 
@@ -310,12 +338,16 @@ router.post('/create-employee', authMiddleware, roleCheckMiddleware('admin'), up
         );
 
         if (result.affectedRows > 0) {
+            // Log the successful employee creation
+            await logLoginActivity(req.user?.username || 'N/A', req.user?.role || 'N/A', 'Success', 'create employee');
             return res.status(201).json({ message: 'Employee registered successfully' });
         } else {
             throw new Error('Failed to register employee');
         }
     } catch (error) {
         console.error('Error during employee registration:', error);
+        // Log the failure in employee creation
+        await logLoginActivity(req.user?.username || 'N/A', req.user?.role || 'N/A', 'Failed', 'create employee');
         return res.status(500).json({ error: 'Server error' });
     }
 });
@@ -340,7 +372,7 @@ router.get('/employee', async (req, res) => {
     }
   });
 
-  router.put('/employee/:id', authMiddleware, roleCheckMiddleware('admin'), upload.single('image'), async (req, res) => {
+router.put('/employee/:id', authMiddleware, roleCheckMiddleware('admin'), upload.single('image'), async (req, res) => {
     const { id } = req.params;
     const { fname, lname, mname, suffix, age, address, email } = req.body;
     const image = req.file ? req.file.path : null;
@@ -380,6 +412,7 @@ router.delete('/employee/:account_id', authMiddleware, roleCheckMiddleware('admi
         const [existingEmployee] = await pool.query('SELECT * FROM Accounts WHERE account_id = ?', [account_id]);
 
         if (existingEmployee.length === 0) {
+            await logLoginActivity(req.user?.username || 'N/A', req.user?.role || 'N/A', 'Failed', 'delete employee');
             return res.status(404).json({ error: 'Employee not found' });
         }
 
@@ -387,14 +420,19 @@ router.delete('/employee/:account_id', authMiddleware, roleCheckMiddleware('admi
         const [result] = await pool.query('DELETE FROM Accounts WHERE account_id = ?', [account_id]);
 
         if (result.affectedRows > 0) {
+            // Log the successful employee deletion
+            await logLoginActivity(req.user?.username || 'N/A', req.user?.role || 'N/A', 'Success', 'delete employee');
             return res.status(200).json({ message: 'Employee deleted successfully' });
         } else {
             throw new Error('Failed to delete employee');
         }
     } catch (error) {
         console.error('Error deleting employee:', error);
+        // Log the failure in employee deletion
+        await logLoginActivity(req.user?.username || 'N/A', req.user?.role || 'N/A', 'Failed', 'delete employee');
         return res.status(500).json({ error: 'Server error' });
     }
 });
+
 module.exports = router;
 

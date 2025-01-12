@@ -87,8 +87,12 @@ CREATE TABLE Orders (
     tracking_number VARCHAR(50),
     carrier VARCHAR(50),
     cancel_reason VARCHAR(255) DEFAULT NULL,
-    FOREIGN KEY (account_id) REFERENCES Accounts(account_id) ON DELETE CASCADE
+    prepared_by INT DEFAULT NULL,  -- Store the account_id (admin/employee)
+    prepared_at DATETIME DEFAULT NULL,
+    FOREIGN KEY (account_id) REFERENCES Accounts(account_id) ON DELETE CASCADE,  -- Foreign key constraint for customer
+    FOREIGN KEY (prepared_by) REFERENCES Accounts(account_id) ON DELETE SET NULL  -- Foreign key constraint for admin/employee
 );
+
 
 CREATE TABLE Payments (
     payment_id INT PRIMARY KEY AUTO_INCREMENT,
