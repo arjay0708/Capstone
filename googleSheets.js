@@ -1,25 +1,20 @@
 const { google } = require('googleapis');
-const path = require('path');
-const fs = require('fs');
 
-// Load the credentials file (service account JSON file)
-const credentials = JSON.parse(fs.readFileSync(path.join(__dirname, './total-method-444314-e1-0bee22582587.json')));
+// Retrieve credentials from environment variables
+const clientEmail = process.env.GOOGLE_CLOUD_CLIENT_EMAIL;
+const privateKey = process.env.GOOGLE_CLOUD_PRIVATE_KEY;
+const spreadsheetId = process.env.SPREADSHEET_ID;  // Your spreadsheet ID
+const sheetName = 'Admin';  // Replace with your sheet name (or create a new one)
 
-// Set up the JWT client with the service account credentials
+// Set up the JWT client with the service account credentials from environment variables
 const auth = new google.auth.JWT(
-  credentials.client_email, // Service account email
-  null, 
-  credentials.private_key, // Private key from the credentials
-  ['https://www.googleapis.com/auth/spreadsheets'], // Scope for Google Sheets API
-  null
+  clientEmail,
+  null,
+  privateKey,
+  ['https://www.googleapis.com/auth/spreadsheets']
 );
 
-// Set up the Google Sheets API client
 const sheets = google.sheets({ version: 'v4', auth });
-
-// Specify your spreadsheet ID and the sheet name
-const spreadsheetId = '1TQIgaqQZKJrnbN6gV_xjK3FeNT0kiQzWC728tNnWaig';
-const sheetName = 'Admin';  // Replace with your sheet name (or create a new one)
 
 // Function to format the timestamp in 'YYYY-MM-DD HH:mm:ss' format
 function formatTimestamp(date) {

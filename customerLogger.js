@@ -1,13 +1,20 @@
 const { google } = require('googleapis');
-const path = require('path');
-const fs = require('fs');
 
-// Load the credentials
-const credentials = JSON.parse(fs.readFileSync(path.join(__dirname, './total-method-444314-e1-0bee22582587.json')));
-const auth = new google.auth.JWT(credentials.client_email, null, credentials.private_key, ['https://www.googleapis.com/auth/spreadsheets']);
+// Retrieve credentials from environment variables
+const clientEmail = process.env.GOOGLE_CLOUD_CLIENT_EMAIL;
+const privateKey = process.env.GOOGLE_CLOUD_PRIVATE_KEY;
+const spreadsheetId = process.env.SPREADSHEET_ID;  // Your spreadsheet ID
+const sheetName = 'Customer';  // The name of the sheet for customers
+
+// Set up the JWT client with the service account credentials from environment variables
+const auth = new google.auth.JWT(
+  clientEmail,
+  null,
+  privateKey,
+  ['https://www.googleapis.com/auth/spreadsheets']
+);
+
 const sheets = google.sheets({ version: 'v4', auth });
-const spreadsheetId = '1TQIgaqQZKJrnbN6gV_xjK3FeNT0kiQzWC728tNnWaig'; // Your spreadsheet ID
-const sheetName = 'Customer'; // The name of the sheet for customers
 
 // Function to format the timestamp
 function formatTimestamp(date) {
