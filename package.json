@@ -41,5 +41,8 @@
     "nodemon": "^3.1.7",
     "typescript": "^5.3.2"
   },
-  "description": ""
+  "description": "",
+  "engines": {
+    "node": "16.x"
+  }
 }
