@@ -800,7 +800,6 @@ router.get('/orders/all', async (req, res) => {
     }
 });
 
-// Route to mark the order as "Preparing"
 router.put('/preparing-order/:order_id', authMiddleware, async (req, res) => {
     const { order_id } = req.params;
     const { username, role } = req.user; // Assuming authMiddleware sets req.user with username and role
@@ -852,10 +851,6 @@ router.put('/preparing-order/:order_id', authMiddleware, async (req, res) => {
     }
 });
 
-
-
-
-// Route to mark the order as "Shipped"
 router.put('/ship-order/:order_id', authMiddleware, roleCheckMiddleware(['admin', 'employee']), async (req, res) => {
     const { order_id } = req.params;
     const { tracking_number, carrier } = req.body;
@@ -919,7 +914,6 @@ router.put('/ship-order/:order_id', authMiddleware, roleCheckMiddleware(['admin'
     }
 });
 
-// Route to mark the order as "Delivered"
 router.put('/deliver-order/:order_id', authMiddleware, async (req, res) => {
     const { order_id } = req.params;
     const { username, role } = req.user;
@@ -951,8 +945,6 @@ router.put('/deliver-order/:order_id', authMiddleware, async (req, res) => {
     }
 });
 
-// Route to cancel an order
-// Delete an order (cancel the order)
 router.put('/cancel/:id/status', authMiddleware, async (req, res) => {
     const order_id = req.params.id; // Extract order ID from the request parameters
     const { status, cancel_reason } = req.body; // Expect status and cancel_reason in the request body

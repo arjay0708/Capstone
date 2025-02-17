@@ -253,7 +253,7 @@ router.post('/create-order', authMiddleware, async (req, res) => {
         });
 
         // Delivery fee logic: base 100 PHP + 20 PHP per additional item
-        const deliveryFee = 0 + (totalQuantity - 1) * 20;
+        const deliveryFee = 100 + (totalQuantity - 1) * 20;
         const finalAmount = totalAmount + deliveryFee;
 
         // Create the order in the database
