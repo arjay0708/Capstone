@@ -137,7 +137,7 @@ router.post('/', authMiddleware, upload.array('images'), async (req, res) => {
     } finally {
         if (connection) connection.release();
     }
-});
+ });
 
   
     router.get('/image/*', async (req, res) => {

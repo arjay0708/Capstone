@@ -129,7 +129,7 @@ router.post('/add-to-cart', authMiddleware, async (req, res) => {
 
 // View cart for a specific account (requires authentication)
 router.get('/view', authMiddleware, async (req, res) => {
-    const account_id = req.user.account_id; // Retrieved from the middleware
+    const account_id = req.user.account_id;
 
     try {
         // Retrieve cart by account ID
@@ -141,7 +141,6 @@ router.get('/view', authMiddleware, async (req, res) => {
 
         const cart_id = cart[0].cart_id;
 
-        // Retrieve items in the cart along with product and variant details
         const [items] = await pool.query(
             `SELECT 
                 CartItem.cart_item_id,
@@ -164,11 +163,8 @@ router.get('/view', authMiddleware, async (req, res) => {
             return res.status(200).json({ message: 'Your cart is empty', items: [] });
         }
 
-        // Parse images and update them to include full Cloudinary URL
         const updatedItems = items.map(item => {
-            // Assuming 'images' is a JSON array stored in the 'Product' table
             const images = JSON.parse(item.images).map(image => {
-                // Construct the Cloudinary URL
                 return `https://res.cloudinary.com/duqbdikz0/image/upload/v1733890541/${image}`;
             });
             return { ...item, images };
@@ -212,7 +208,6 @@ router.delete('/remove/:cart_item_id', authMiddleware, async (req, res) => {
         res.status(500).json({ error: 'Error removing product from cart' });
     }
 });
-
 
 router.post('/create-order', authMiddleware, async (req, res) => {
     const account_id = req.user.account_id;
@@ -258,7 +253,7 @@ router.post('/create-order', authMiddleware, async (req, res) => {
         });
 
         // Delivery fee logic: base 100 PHP + 20 PHP per additional item
-        const deliveryFee = 100 + (totalQuantity - 1) * 20;
+        const deliveryFee = 0 + (totalQuantity - 1) * 20;
         const finalAmount = totalAmount + deliveryFee;
 
         // Create the order in the database
