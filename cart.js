@@ -14,10 +14,13 @@ const sendOrderConfirmationEmail = async (userEmail, orderDetails, username) => 
     const transporter = nodemailer.createTransport({
         service: 'gmail',
         auth: {
-            user: process.env.EMAIL_USER,     // Use the EMAIL_USER from .env
-            pass: process.env.EMAIL_PASSWORD, // Use the EMAIL_PASSWORD from .env
+            user: process.env.EMAIL_USER,
+            pass: process.env.EMAIL_PASSWORD,
         },
     });
+
+    // Calculate total with delivery fee (for email only)
+    const totalWithDelivery = orderDetails.total_amount + orderDetails.delivery_fee;
 
     const mailOptions = {
         from: process.env.EMAIL_USER,
@@ -40,7 +43,8 @@ const sendOrderConfirmationEmail = async (userEmail, orderDetails, username) => 
                     `).join('')}
             </ul>
             <p><strong>Delivery Fee:</strong> ₱${orderDetails.delivery_fee.toFixed(2)}</p>
-            <p><strong>Total Amount:</strong> ₱${orderDetails.total_amount.toFixed(2)}</p>
+            <p><strong>Total Amount (including delivery fee):</strong> ₱${totalWithDelivery.toFixed(2)}</p>
+            ${orderDetails.note ? `<p><strong>Note:</strong> ${orderDetails.note}</p>` : ''}
         `,
     };
 
@@ -51,7 +55,6 @@ const sendOrderConfirmationEmail = async (userEmail, orderDetails, username) => 
         console.error('Error sending email:', error);
     }
 };
-
 
 // Add item to cart (requires authentication)
 router.post('/add-to-cart', authMiddleware, async (req, res) => {
@@ -126,7 +129,6 @@ router.post('/add-to-cart', authMiddleware, async (req, res) => {
     }
 });
 
-
 // View cart for a specific account (requires authentication)
 router.get('/view', authMiddleware, async (req, res) => {
     const account_id = req.user.account_id;
@@ -149,6 +151,7 @@ router.get('/view', authMiddleware, async (req, res) => {
                 ProductVariant.size,
                 ProductVariant.gender,
                 ProductVariant.quantity AS available_quantity,
+                Product.product_id,
                 Product.price,
                 Product.Pname,
                 Product.images
@@ -181,6 +184,21 @@ router.get('/view', authMiddleware, async (req, res) => {
     }
 });
 
+router.patch('/update-quantity', authMiddleware, async (req, res) => {
+    const { cartItemId, quantity } = req.body;
+  
+    try {
+      await pool.query(
+        'UPDATE CartItem SET quantity = ? WHERE cart_item_id = ?',
+        [quantity, cartItemId]
+      );
+      res.status(200).json({ message: 'Quantity updated successfully' });
+    } catch (error) {
+      console.error('Error updating quantity:', error);
+      res.status(500).json({ error: 'Failed to update cart item quantity' });
+    }
+  });
+
 router.delete('/remove/:cart_item_id', authMiddleware, async (req, res) => {
     const { cart_item_id } = req.params;
     const account_id = req.user.account_id;
@@ -211,14 +229,13 @@ router.delete('/remove/:cart_item_id', authMiddleware, async (req, res) => {
 
 router.post('/create-order', authMiddleware, async (req, res) => {
     const account_id = req.user.account_id;
-    const { cart_item_ids } = req.body; // Array of selected cart item IDs
+    const { cart_item_ids, note } = req.body; // Added note field
 
     if (!cart_item_ids || cart_item_ids.length === 0) {
         return res.status(400).json({ message: 'No cart items selected for order' });
     }
 
     try {
-        // Validate that the selected cart items belong to the user's cart
         const [cartItems] = await pool.query(
             `SELECT 
                 CartItem.cart_item_id,
@@ -243,7 +260,6 @@ router.post('/create-order', authMiddleware, async (req, res) => {
         let totalAmount = 0;
         let totalQuantity = 0;
 
-        // Check stock availability and calculate total amount
         cartItems.forEach(item => {
             if (item.order_quantity > item.available_quantity) {
                 throw new Error(`Insufficient stock for item ID ${item.product_variant_id}`);
@@ -252,18 +268,19 @@ router.post('/create-order', authMiddleware, async (req, res) => {
             totalQuantity += item.order_quantity;
         });
 
-        // Delivery fee logic: base 100 PHP + 20 PHP per additional item
+        // Calculate delivery fee (but do NOT add it to final amount)
         const deliveryFee = 100 + (totalQuantity - 1) * 20;
-        const finalAmount = totalAmount + deliveryFee;
 
-        // Create the order in the database
+        // Final amount (without delivery fee)
+        const finalAmount = totalAmount; 
+
         const [newOrder] = await pool.query(
             'INSERT INTO Orders (account_id, total_amount) VALUES (?, ?)',
-            [account_id, finalAmount]
+            [account_id, finalAmount || null]
         );
+
         const order_id = newOrder.insertId;
 
-        // Insert order items and update product stock
         for (const item of cartItems) {
             await pool.query(
                 'INSERT INTO OrderItem (order_id, product_variant_id, quantity, price_at_purchase) VALUES (?, ?, ?, ?)',
@@ -276,10 +293,8 @@ router.post('/create-order', authMiddleware, async (req, res) => {
             );
         }
 
-        // Remove the selected items from the cart
         await pool.query('DELETE FROM CartItem WHERE cart_item_id IN (?)', [cart_item_ids]);
 
-        // Fetch user's email and username
         const [userResult] = await pool.query(
             'SELECT email, username FROM Accounts WHERE account_id = ?',
             [account_id]
@@ -291,36 +306,32 @@ router.post('/create-order', authMiddleware, async (req, res) => {
 
         const { email: userEmail, username } = userResult[0];
 
-        // Prepare order details for the email
         const orderDetails = {
             order_id,
-            total_amount: finalAmount, // Total includes delivery fee
-            delivery_fee: deliveryFee,
+            total_amount: finalAmount,  // Excludes delivery fee
+            delivery_fee: deliveryFee,  // Still send delivery fee in email
+            note, // Include note
             items: cartItems.map(item => ({
                 Pname: item.Pname,
                 size: item.size,
                 order_quantity: item.order_quantity,
-                price: item.price, // Include product price
+                price: item.price,
             })),
         };
 
-        // Send order confirmation email
         await sendOrderConfirmationEmail(userEmail, orderDetails, username);
 
-        // Log successful order placement
         await logCustomerActivity(username, `Order placed successfully. Order ID: ${order_id}`, 'CREATE_ORDER');
 
-        // Send response to the client
         res.status(200).json({
             message: 'Order placed successfully',
             order_id,
-            totalAmount: finalAmount,
+            totalAmount: finalAmount,  // Excludes delivery fee
         });
     } catch (error) {
         console.error('Error placing order:', error);
         const errorMessage = error.message || 'Error placing order';
 
-        // Log error during order creation
         await logCustomerActivity(req.user.username, errorMessage, 'CREATE_ORDER_ERROR');
 
         res.status(500).json({ error: errorMessage });
